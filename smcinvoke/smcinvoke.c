@@ -29,9 +29,11 @@
 #include <asm/cacheflush.h>
 #include <soc/qcom/qseecomi.h>
 #include <linux/qtee_shmbridge.h>
+#include <linux/kthread.h>
 #include "misc/qseecom_kernel.h"
 #include "smcinvoke.h"
 #include "smcinvoke_object.h"
+#include "IClientEnv.h"
 
 #define CREATE_TRACE_POINTS
 #include "trace_smcinvoke.h"
@@ -313,8 +315,8 @@ struct smcinvoke_worker_thread {
 	struct task_struct *postprocess_kthread_task;
 };
 
-struct smcinvoke_worker_thread smcinvoke[MAX_THREAD_NUMBER];
-const char thread_name[MAX_THREAD_NUMBER][MAX_CHAR_NAME] = {
+static struct smcinvoke_worker_thread smcinvoke[MAX_THREAD_NUMBER];
+static const char thread_name[MAX_THREAD_NUMBER][MAX_CHAR_NAME] = {
 	"smcinvoke_shmbridge_postprocess", "smcinvoke_object_postprocess"};
 
 static int prepare_send_scm_msg(const uint8_t *in_buf, phys_addr_t in_paddr,
@@ -640,26 +642,43 @@ static void smcinvoke_destroy_kthreads(void)
 
 static inline void free_mem_obj_locked(struct smcinvoke_mem_obj *mem_obj)
 {
+	int ret = 0;
+	bool is_bridge_created = mem_obj->is_smcinvoke_created_shmbridge;
+	struct dma_buf *dmabuf_to_free = mem_obj->dma_buf;
+	uint64_t shmbridge_handle = mem_obj->shmbridge_handle;
 	struct smcinvoke_shmbridge_deregister_pending_list *entry = NULL;
 
-	if (!mem_obj->is_smcinvoke_created_shmbridge) {
-		entry = kzalloc(sizeof(*entry), GFP_KERNEL);
-		if (!entry)
-			return;
-		entry->data.shmbridge_handle = mem_obj->shmbridge_handle;
-		entry->data.dmabuf_to_free = mem_obj->dma_buf;
-		mutex_lock(&bridge_postprocess_lock);
-		list_add_tail(&entry->list, &g_bridge_postprocess);
-		mutex_unlock(&bridge_postprocess_lock);
-		pr_debug("SHMBridge list: added a Handle:%#llx\n",
-				mem_obj->shmbridge_handle);
-		__wakeup_postprocess_kthread(&smcinvoke[SHMB_WORKER_THREAD]);
-	} else {
-		dma_buf_put(mem_obj->dma_buf);
-	}
 	list_del(&mem_obj->list);
 	kfree(mem_obj);
 	mem_obj = NULL;
+	mutex_unlock(&g_smcinvoke_lock);
+
+	if (is_bridge_created)
+		ret = qtee_shmbridge_deregister(shmbridge_handle);
+	if (ret) {
+		pr_err("Error:%d delete bridge failed leaking memory 0x%x\n",
+				ret, dmabuf_to_free);
+		if (ret == -EBUSY) {
+			pr_err("EBUSY: we postpone it 0x%x\n",
+					dmabuf_to_free);
+			entry = kzalloc(sizeof(*entry), GFP_KERNEL);
+			if (entry) {
+				entry->data.shmbridge_handle = shmbridge_handle;
+				entry->data.dmabuf_to_free = dmabuf_to_free;
+				mutex_lock(&bridge_postprocess_lock);
+				list_add_tail(&entry->list, &g_bridge_postprocess);
+				mutex_unlock(&bridge_postprocess_lock);
+				pr_debug("SHMBridge list: added a Handle:%#llx\n",
+						shmbridge_handle);
+				__wakeup_postprocess_kthread(
+						&smcinvoke[SHMB_WORKER_THREAD]);
+			}
+		}
+	} else {
+		dma_buf_put(dmabuf_to_free);
+	}
+
+	mutex_lock(&g_smcinvoke_lock);
 }
 
 static void del_mem_regn_obj_locked(struct kref *kref)
@@ -2238,6 +2257,14 @@ static long process_invoke_req(struct file *filp, unsigned int cmd,
 		return -EINVAL;
 	}
 
+	if (context_type == SMCINVOKE_OBJ_TYPE_TZ_OBJ &&
+			tzobj->tzhandle == SMCINVOKE_TZ_ROOT_OBJ &&
+			(req.op == IClientEnv_OP_notifyDomainChange ||
+			req.op == IClientEnv_OP_registerWithCredentials)) {
+		pr_err("invalid rootenv op\n");
+		return -EINVAL;
+	}
+
 	nr_args = OBJECT_COUNTS_NUM_buffers(req.counts) +
 			OBJECT_COUNTS_NUM_objects(req.counts);
 
@@ -2644,11 +2671,26 @@ static int smcinvoke_probe(struct platform_device *pdev)
 	unsigned int count = 1;
 	int rc = 0;
 
+	rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
+	if (rc) {
+		pr_err("dma_set_mask_and_coherent failed %d\n", rc);
+		return rc;
+	}
+	legacy_smc_call = of_property_read_bool((&pdev->dev)->of_node,
+			"qcom,support-legacy_smc");
+	invoke_cmd = legacy_smc_call ? SMCINVOKE_INVOKE_CMD_LEGACY : SMCINVOKE_INVOKE_CMD;
+
+	rc = smcinvoke_create_kthreads();
+	if (rc) {
+		pr_err("smcinvoke_create_kthreads failed %d\n", rc);
+		return rc;
+	}
+
 	rc = alloc_chrdev_region(&smcinvoke_device_no, baseminor, count,
 							SMCINVOKE_DEV);
 	if (rc < 0) {
 		pr_err("chrdev_region failed %d for %s\n", rc, SMCINVOKE_DEV);
-		return rc;
+		goto exit_destroy_wkthread;
 	}
 	driver_class = class_create(THIS_MODULE, SMCINVOKE_DEV);
 	if (IS_ERR(driver_class)) {
@@ -2674,31 +2716,17 @@ static int smcinvoke_probe(struct platform_device *pdev)
 		goto exit_destroy_device;
 	}
 	smcinvoke_pdev = pdev;
-	rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (rc) {
-		pr_err("dma_set_mask_and_coherent failed %d\n", rc);
-		goto exit_cv_del;
-	}
-	legacy_smc_call = of_property_read_bool((&pdev->dev)->of_node,
-			"qcom,support-legacy_smc");
-	invoke_cmd = legacy_smc_call ? SMCINVOKE_INVOKE_CMD_LEGACY : SMCINVOKE_INVOKE_CMD;
-
-	rc = smcinvoke_create_kthreads();
-	if (rc) {
-		pr_err("smcinvoke_create_kthreads failed %d\n", rc);
-		goto exit_cv_del;
-	}
 
 	return 0;
 
-exit_cv_del:
-	cdev_del(&smcinvoke_cdev);
 exit_destroy_device:
 	device_destroy(driver_class, smcinvoke_device_no);
 exit_destroy_class:
 	class_destroy(driver_class);
 exit_unreg_chrdev_region:
 	unregister_chrdev_region(smcinvoke_device_no, count);
+exit_destroy_wkthread:
+	smcinvoke_destroy_kthreads();
 	return rc;
 }
 
