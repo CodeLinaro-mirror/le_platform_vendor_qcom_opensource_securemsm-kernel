@@ -786,6 +786,7 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 				podev->lock,
 				msecs_to_jiffies(MAX_REQUEST_TIME)) == 0) {
 				pr_err("%s: request timed out\n", __func__);
+				spin_unlock_irqrestore(&podev->lock, flags);
 				return qcedev_areq->err;
 			}
 		}
@@ -823,14 +824,17 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 		pr_err("%s: wait timed out, req info = %d\n", __func__,
 					current_req_info);
 		print_sts = true;
+		spin_lock_irqsave(&podev->lock, flags);
 		qcedev_check_crypto_status(qcedev_areq, podev->qce, print_sts);
 		qcedev_areq->timed_out = true;
 		ret = qce_manage_timeout(podev->qce, current_req_info);
 		if (ret) {
 			pr_err("%s: error during manage timeout", __func__);
 			qcedev_areq->err = -EIO;
+			spin_unlock_irqrestore(&podev->lock, flags);
 			return qcedev_areq->err;
 		}
+		spin_unlock_irqrestore(&podev->lock, flags);
 		tasklet_schedule(&podev->done_tasklet);
 		if (qcedev_areq->offload_cipher_op_req.err !=
 						QCEDEV_OFFLOAD_NO_ERROR)
@@ -2415,7 +2419,9 @@ long qcedev_ioctl(struct file *file,
 				goto exit_free_qcedev_areq;
 			}
 
-			if (map_buf.num_fds > QCEDEV_MAX_BUFFERS) {
+			if (map_buf.num_fds > ARRAY_SIZE(map_buf.fd)) {
+				pr_err("%s: err: num_fds = %d exceeds max value\n",
+							__func__, map_buf.num_fds);
 				err = -EINVAL;
 				goto exit_free_qcedev_areq;
 			}
@@ -2453,6 +2459,12 @@ long qcedev_ioctl(struct file *file,
 			if (copy_from_user(&unmap_buf,
 				(void __user *)arg, sizeof(unmap_buf))) {
 				err = -EFAULT;
+				goto exit_free_qcedev_areq;
+			}
+			if (unmap_buf.num_fds > ARRAY_SIZE(unmap_buf.fd)) {
+				pr_err("%s: err: num_fds = %d exceeds max value\n",
+							__func__, unmap_buf.num_fds);
+				err = -EINVAL;
 				goto exit_free_qcedev_areq;
 			}
 
