@@ -1350,8 +1350,14 @@ static int invoke_cmd_handler(int cmd, phys_addr_t in_paddr, size_t in_buf_len,
 		break;
 
 	case SMCINVOKE_CB_RSP_CMD:
+		if (legacy_smc_call)
+			qtee_shmbridge_inv_shm_buf(out_shm);
 		ret = qcom_scm_invoke_callback_response(virt_to_phys(out_buf), out_buf_len,
 				result, response_type, data);
+		if (legacy_smc_call) {
+			qtee_shmbridge_inv_shm_buf(in_shm);
+			qtee_shmbridge_inv_shm_buf(out_shm);
+		}
 		break;
 
 	default:
@@ -1458,7 +1464,7 @@ static void process_tzcb_req(void *buf, size_t buf_len, struct file **arr_filp)
 	timeout_jiff = msecs_to_jiffies(1000);
 
 	while (cbobj_retries < CBOBJ_MAX_RETRIES) {
-		ret = wait_event_interruptible_timeout(srvr_info->rsp_wait_q,
+		ret = wait_event_timeout(srvr_info->rsp_wait_q,
 				(cb_txn->state == SMCINVOKE_REQ_PROCESSED) ||
 				(srvr_info->state == SMCINVOKE_SERVER_STATE_DEFUNCT),
 				timeout_jiff);
