@@ -25,6 +25,7 @@
 #include "linux/platform_data/qcom_crypto_device.h"
 #include "linux/qcedev.h"
 #include <linux/interconnect.h>
+#include <linux/delay.h>
 
 #include <crypto/hash.h>
 #include "qcedevi.h"
@@ -50,6 +51,7 @@ enum qcedev_req_status {
 	QCEDEV_REQ_CURRENT = 0,
 	QCEDEV_REQ_WAITING = 1,
 	QCEDEV_REQ_SUBMITTED = 2,
+	QCEDEV_REQ_DONE = 3,
 };
 
 static uint8_t  _std_init_vector_sha1_uint8[] =   {
@@ -195,10 +197,23 @@ static void qcedev_ce_high_bw_req(struct qcedev_control *podev,
 			ret = qcedev_control_clocks(podev, true);
 			if (ret)
 				goto exit_unlock_mutex;
+			ret = qce_set_irqs(podev->qce, true);
+			if (ret) {
+				pr_err("%s: could not enable bam irqs, ret = %d",
+						__func__, ret);
+				qcedev_control_clocks(podev, false);
+				goto exit_unlock_mutex;
+			}
 		}
 		podev->high_bw_req_count++;
 	} else {
 		if (podev->high_bw_req_count == 1) {
+			ret = qce_set_irqs(podev->qce, false);
+			if (ret) {
+				pr_err("%s: could not disable bam irqs, ret = %d",
+						__func__, ret);
+				goto exit_unlock_mutex;
+			}
 			ret = qcedev_control_clocks(podev, false);
 			if (ret)
 				goto exit_unlock_mutex;
@@ -324,8 +339,10 @@ static void req_done(unsigned long data)
 	areq = podev->active_command;
 	podev->active_command = NULL;
 
-	if (areq && !areq->timed_out)
+	if (areq && !areq->timed_out) {
 		complete(&areq->complete);
+		areq->state = QCEDEV_REQ_DONE;
+	}
 
 	/* Look through queued requests and wake up the corresponding thread */
 	if (!list_empty(&podev->ready_commands)) {
@@ -732,6 +749,8 @@ static void qcedev_check_crypto_status(
 	}
 }
 
+#define MAX_RETRIES		333
+
 static int submit_req(struct qcedev_async_req *qcedev_areq,
 					struct qcedev_handle *handle)
 {
@@ -743,6 +762,7 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 	int wait = MAX_CRYPTO_WAIT_TIME;
 	bool print_sts = false;
 	struct qcedev_async_req *new_req = NULL;
+	int retries = 0;
 
 	qcedev_areq->err = 0;
 	podev = handle->cntl;
@@ -828,13 +848,18 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 		qcedev_check_crypto_status(qcedev_areq, podev->qce, print_sts);
 		qcedev_areq->timed_out = true;
 		ret = qce_manage_timeout(podev->qce, current_req_info);
+		spin_unlock_irqrestore(&podev->lock, flags);
 		if (ret) {
 			pr_err("%s: error during manage timeout", __func__);
-			qcedev_areq->err = -EIO;
-			spin_unlock_irqrestore(&podev->lock, flags);
-			return qcedev_areq->err;
+			while (qcedev_areq->state != QCEDEV_REQ_DONE &&
+					retries < MAX_RETRIES) {
+				usleep_range(3000, 5000);
+				retries++;
+				pr_err("%s: waiting for req state to be done, retries = %d",
+						__func__, retries);
+			}
+			return 0;
 		}
-		spin_unlock_irqrestore(&podev->lock, flags);
 		tasklet_schedule(&podev->done_tasklet);
 		if (qcedev_areq->offload_cipher_op_req.err !=
 						QCEDEV_OFFLOAD_NO_ERROR)
@@ -2580,13 +2605,21 @@ static int qcedev_probe_device(struct platform_device *pdev)
 		rc = -ENODEV;
 		goto exit_scale_busbandwidth;
 	}
+	podev->qce = handle;
+
+	rc = qce_set_irqs(podev->qce, false);
+	if (rc) {
+		pr_err("%s: could not disable bam irqs, ret = %d",
+				__func__, rc);
+		goto exit_scale_busbandwidth;
+	}
+
 	rc = icc_set_bw(podev->icc_path, 0, 0);
 	if (rc) {
 		pr_err("%s Unable to set to low bandwidth\n", __func__);
 		goto exit_qce_close;
 	}
 
-	podev->qce = handle;
 	podev->pdev = pdev;
 	platform_set_drvdata(pdev, podev);
 
@@ -2701,6 +2734,12 @@ static int qcedev_suspend(struct platform_device *pdev, pm_message_t state)
 
 	mutex_lock(&qcedev_sent_bw_req);
 	if (podev->high_bw_req_count) {
+		ret = qce_set_irqs(podev->qce, false);
+		if (ret) {
+			pr_err("%s: could not disable bam irqs, ret = %d",
+					__func__, ret);
+			goto suspend_exit;
+		}
 		ret = qcedev_control_clocks(podev, false);
 		if (ret)
 			goto suspend_exit;
@@ -2726,6 +2765,12 @@ static int qcedev_resume(struct platform_device *pdev)
 		ret = qcedev_control_clocks(podev, true);
 		if (ret)
 			goto resume_exit;
+		ret = qce_set_irqs(podev->qce, true);
+		if (ret) {
+			pr_err("%s: could not enable bam irqs, ret = %d",
+					__func__, ret);
+			qcedev_control_clocks(podev, false);
+		}
 	}
 
 resume_exit:
