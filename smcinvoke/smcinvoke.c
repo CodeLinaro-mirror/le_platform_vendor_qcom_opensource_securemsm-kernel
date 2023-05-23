@@ -27,6 +27,7 @@
 #include <linux/firmware.h>
 #include <linux/qcom_scm.h>
 #include <linux/freezer.h>
+#include <linux/ratelimit.h>
 #include <asm/cacheflush.h>
 #include <soc/qcom/qseecomi.h>
 #include <linux/qtee_shmbridge.h>
@@ -62,6 +63,18 @@
 #define SMCINVOKE_MEM_PERM_RW			6
 #define SMCINVOKE_SCM_EBUSY_WAIT_MS		30
 #define SMCINVOKE_SCM_EBUSY_MAX_RETRY		200
+#define TZCB_ERR_RATELIMIT_INTERVAL		(1*HZ)
+#define TZCB_ERR_RATELIMIT_BURST		1
+
+//print tzcb err per sec
+#define tzcb_err_ratelimited(fmt, ...) 	do {		\
+	static DEFINE_RATELIMIT_STATE(_rs, 		\
+			TZCB_ERR_RATELIMIT_INTERVAL,	\
+			TZCB_ERR_RATELIMIT_BURST);	\
+	if (__ratelimit(&_rs))				\
+		pr_err(fmt, ##__VA_ARGS__);		\
+} while(0)
+
 
 
 /* TZ defined values - Start */
@@ -385,7 +398,7 @@ static int prepare_send_scm_msg(const uint8_t *in_buf, phys_addr_t in_paddr,
 		struct smcinvoke_cmd_req *req,
 		union smcinvoke_arg *args_buf,
 		bool *tz_acked, uint32_t context_type,
-		struct qtee_shm *in_shm, struct qtee_shm *out_shm);
+		struct qtee_shm *in_shm, struct qtee_shm *out_shm, bool retry);
 
 static void process_piggyback_data(void *buf, size_t buf_size);
 static void add_mem_obj_info_to_async_side_channel_locked(void *buf, size_t buf_size, struct list_head *l_pending_mem_obj);
@@ -559,7 +572,7 @@ static int smcinvoke_release_tz_object(struct qtee_shm *in_shm, struct qtee_shm 
 	ret = prepare_send_scm_msg(in_buf, in_shm->paddr,
 			SMCINVOKE_TZ_MIN_BUF_SIZE, out_buf, out_shm->paddr,
 			SMCINVOKE_TZ_MIN_BUF_SIZE, &req, NULL,
-			&release_handles, context_type, in_shm, out_shm);
+			&release_handles, context_type, in_shm, out_shm, false);
 	process_piggyback_data(out_buf, SMCINVOKE_TZ_MIN_BUF_SIZE);
 	if (ret) {
 		pr_err_ratelimited("Failed to release object(0x%x), ret:%d\n",
@@ -1016,8 +1029,6 @@ static struct smcinvoke_cb_txn *find_cbtxn_locked(
 {
 	int i = 0;
 	struct smcinvoke_cb_txn *cb_txn = NULL;
-	struct smcinvoke_mem_obj *mem_obj = NULL;
-	int32_t tzhandle = 0;
 
 	/*
 	 * Since HASH_BITS() does not work on pointers, we can't select hash
@@ -1027,12 +1038,6 @@ static struct smcinvoke_cb_txn *find_cbtxn_locked(
 		/* pick up 1st req */
 		hash_for_each(server->reqs_table, i, cb_txn, hash) {
 			kref_get(&cb_txn->ref_cnt);
-			tzhandle = (cb_txn->cb_req)->hdr.tzhandle;
-			if(TZHANDLE_IS_MEM_OBJ(tzhandle)) {
-				mem_obj= find_mem_obj_locked(TZHANDLE_GET_OBJID(tzhandle),
-								SMCINVOKE_MEM_RGN_OBJ);
-				kref_get(&mem_obj->mem_regn_ref_cnt);
-			}
 			hash_del(&cb_txn->hash);
 			return cb_txn;
 		}
@@ -1041,12 +1046,6 @@ static struct smcinvoke_cb_txn *find_cbtxn_locked(
 				server->responses_table, cb_txn, hash, txn_id) {
 			if (cb_txn->txn_id == txn_id) {
 				kref_get(&cb_txn->ref_cnt);
-				tzhandle = (cb_txn->cb_req)->hdr.tzhandle;
-				if(TZHANDLE_IS_MEM_OBJ(tzhandle)) {
-					mem_obj= find_mem_obj_locked(TZHANDLE_GET_OBJID(tzhandle),
-									SMCINVOKE_MEM_RGN_OBJ);
-					kref_get(&mem_obj->mem_regn_ref_cnt);
-				}
 				hash_del(&cb_txn->hash);
 				return cb_txn;
 			}
@@ -1726,13 +1725,13 @@ static void process_tzcb_req(void *buf, size_t buf_len, struct file **arr_filp)
 		}
 		if (ret == 0) {
 			if (srvr_info->is_server_suspended == 0) {
-			pr_err("CBobj timed out waiting on cbtxn :%d,cb-tzhandle:%d, retry:%d, op:%d counts :%d\n",
-					cb_txn->txn_id,cb_req->hdr.tzhandle, cbobj_retries,
-					cb_req->hdr.op, cb_req->hdr.counts);
-			pr_err("CBobj %d timedout pid %x,tid %x, srvr state=%d, srvr id:%u\n",
-					cb_req->hdr.tzhandle, current->pid,
-					current->tgid, srvr_info->state,
-					srvr_info->server_id);
+				tzcb_err_ratelimited("CBobj timed out waiting on cbtxn :%d,cb-tzhandle:%d, retry:%d, op:%d counts :%d\n",
+						cb_txn->txn_id,cb_req->hdr.tzhandle, cbobj_retries,
+						cb_req->hdr.op, cb_req->hdr.counts);
+				tzcb_err_ratelimited("CBobj %d timedout pid %x,tid %x, srvr state=%d, srvr id:%u\n",
+						cb_req->hdr.tzhandle, current->pid,
+						current->tgid, srvr_info->state,
+						srvr_info->server_id);
 			}
 		} else {
 			/* wait_event returned due to a signal */
@@ -1793,12 +1792,6 @@ out:
 
 	memcpy(buf, cb_req, buf_len);
 
-	if (TZHANDLE_IS_MEM_RGN_OBJ(cb_req->hdr.tzhandle)) {
-		mutex_unlock(&g_smcinvoke_lock);
-		process_mem_obj(buf, buf_len);
-		pr_err("ppid : %x, mem obj deleted\n", current->pid);
-		mutex_lock(&g_smcinvoke_lock);
-	}
 	kref_put(&cb_txn->ref_cnt, delete_cb_txn_locked);
 	if (srvr_info)
 		kref_put(&srvr_info->ref_cnt, destroy_cb_server);
@@ -1894,7 +1887,8 @@ static int prepare_send_scm_msg(const uint8_t *in_buf, phys_addr_t in_paddr,
 		struct smcinvoke_cmd_req *req,
 		union smcinvoke_arg *args_buf,
 		bool *tz_acked, uint32_t context_type,
-		struct qtee_shm *in_shm, struct qtee_shm *out_shm)
+		struct qtee_shm *in_shm, struct qtee_shm *out_shm,
+		bool retry)
 {
 	int ret = 0, cmd, retry_count = 0;
 	u64 response_type;
@@ -1919,7 +1913,7 @@ static int prepare_send_scm_msg(const uint8_t *in_buf, phys_addr_t in_paddr,
 				msleep(SMCINVOKE_SCM_EBUSY_WAIT_MS);
 			}
 
-		} while ((ret == -EBUSY) &&
+		} while (retry && (ret == -EBUSY) &&
 				(retry_count++ < SMCINVOKE_SCM_EBUSY_MAX_RETRY));
 
 		if (!ret && !is_inbound_req(response_type)) {
@@ -2196,7 +2190,16 @@ static int marshal_out_tzcb_req(const struct smcinvoke_accept *user_req,
 	size_t async_buf_size;
 	uint32_t offset = 0;
 
-	release_tzhandles(&cb_txn->cb_req->hdr.tzhandle, 1);
+	/* We assume 'marshal_in_tzcb_req' increases the ref-count of the CBOBJs.
+	 * It should be the case for mem-obj as well. However, it does not do that.
+	 * It is easier to filter out the 'release_tzhandles' for mem-obj here rather
+	 * than increases its ref-count on 'marshal_in_tzcb_req'. Because, there is no
+	 * reliable error handling and cleanup in 'marshal_in_tzcb_req'. So if it fails
+	 * mem-obj may not get released.  **/
+
+	if (!TZHANDLE_IS_MEM_OBJ(cb_txn->cb_req->hdr.tzhandle))
+		release_tzhandles(&cb_txn->cb_req->hdr.tzhandle, 1);
+
 	tzcb_req->result = user_req->result;
         /* Return without marshaling user args if destination callback invocation was
            unsuccessful. */
@@ -2407,6 +2410,23 @@ static void delete_pending_async_list_locked(struct list_head *l_pending_mem_obj
 		mem_obj_pending->mem_obj = NULL;
 		list_del(&mem_obj_pending->list);
 		kfree(mem_obj_pending);
+	}
+}
+
+
+/*
+ * Unmap/release the mapped objects from  pending async list.
+ */
+static void release_map_obj_pending_async_list_locked(struct list_head *l_pending_mem_obj)
+{
+	struct smcinvoke_mem_obj_pending_async *mem_obj_pending = NULL;
+	struct smcinvoke_mem_obj_pending_async *temp = NULL;
+
+	if (list_empty(l_pending_mem_obj))
+		return;
+
+	list_for_each_entry_safe(mem_obj_pending, temp, l_pending_mem_obj, list) {
+		kref_put(&mem_obj_pending->mem_obj->mem_map_obj_ref_cnt, del_mem_map_obj_locked);
 	}
 }
 
@@ -2779,7 +2799,7 @@ static long process_invoke_req(struct file *filp, unsigned int cmd,
 	ret = prepare_send_scm_msg(in_msg, in_shm.paddr, inmsg_size,
 			out_msg, out_shm.paddr, outmsg_size,
 			&req, args_buf, &tz_acked, context_type,
-			&in_shm, &out_shm);
+			&in_shm, &out_shm, true);
 
 	/*
 	 * If scm_call is success, TZ owns responsibility to release
@@ -2826,8 +2846,10 @@ out:
 			req.op, req.counts);
 
 	release_filp(filp_to_release, OBJECT_COUNTS_MAX_OO);
-	if (ret)
+	if (ret) {
+		release_map_obj_pending_async_list_locked(&l_mem_objs_pending_async);
 		release_tzhandles(tzhandles_to_release, OBJECT_COUNTS_MAX_OO);
+	}
 	qtee_shmbridge_free_shm(&in_shm);
 	qtee_shmbridge_free_shm(&out_shm);
 	kfree(args_buf);
