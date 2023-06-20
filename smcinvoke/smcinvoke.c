@@ -29,7 +29,6 @@
 #include <linux/freezer.h>
 #include <linux/ratelimit.h>
 #include <asm/cacheflush.h>
-#include <soc/qcom/qseecomi.h>
 #include <linux/qtee_shmbridge.h>
 #include <linux/kthread.h>
 #include "smcinvoke.h"
@@ -41,6 +40,7 @@
 #else
 #include "misc/qseecom_kernel.h"
 #endif
+#include "misc/qseecomi.h"
 
 #define CREATE_TRACE_POINTS
 #include "trace_smcinvoke.h"
@@ -2085,7 +2085,7 @@ static int marshal_in_tzcb_req(const struct smcinvoke_cb_txn *cb_txn,
 
 	user_req->txn_id = cb_txn->txn_id;
 	if (get_uhandle_from_tzhandle(tzcb_req->hdr.tzhandle, srvr_id,
-			&user_req->cbobj_id, TAKE_LOCK,
+			(int32_t*)(&user_req->cbobj_id), TAKE_LOCK,
 			SMCINVOKE_OBJ_TYPE_TZ_OBJ)) {
 		ret = -EINVAL;
 		goto out;
@@ -3226,7 +3226,7 @@ static int smcinvoke_probe(struct platform_device *pdev)
 	}
 	smcinvoke_pdev = pdev;
 
-#if !IS_ENABLED(CONFIG_QSEECOM) && IS_ENABLED(CONFIG_QSEECOM_PROXY)
+#if IS_ENABLED(CONFIG_QSEECOM_COMPAT) && IS_ENABLED(CONFIG_QSEECOM_PROXY)
 	/*If the api fails to get the func ops, print the error and continue
 	* Do not treat it as fatal*/
 	rc = get_qseecom_kernel_fun_ops();
