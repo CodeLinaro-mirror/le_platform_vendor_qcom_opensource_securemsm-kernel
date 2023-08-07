@@ -7,7 +7,7 @@ ifneq ($(CONFIG_ARCH_QTI_VM), y)
 endif
 
 #Enable Qseecom if CONFIG_ARCH_KHAJE OR CONFIG_ARCH_KHAJE or CONFIG_QTI_QUIN_GVM or CONFIG_ARCH_MONACO or CONFIG_ARCH_SCUBA_AUTO or CONFIG_ARCH_SA410M or CONFIG_ARCH_KONA is set to y
-ifneq (, $(filter y, $(CONFIG_QTI_QUIN_GVM) $(CONFIG_ARCH_KHAJE) $(CONFIG_ARCH_SA8155) $(CONFIG_ARCH_LEMANS) $(CONFIG_ARCH_MONACO) $(CONFIG_ARCH_SCUBA_AUTO) $(CONFIG_ARCH_SA410M) $(CONFIG_ARCH_KONA)))
+ifneq (, $(filter y, $(CONFIG_QTI_QUIN_GVM) $(CONFIG_ARCH_KHAJE) $(CONFIG_ARCH_SA8155) $(CONFIG_ARCH_LEMANS) $(CONFIG_ARCH_MONACO) $(CONFIG_ARCH_SCUBA_AUTO) $(CONFIG_ARCH_SA410M) $(CONFIG_ARCH_KONA) $(CONFIG_ARCH_QCS405)))
     include $(SSG_MODULE_ROOT)/config/sec-kernel_defconfig_qseecom.conf
     LINUXINCLUDE += -include $(SSG_MODULE_ROOT)/config/sec-kernel_defconfig_qseecom.h
 
@@ -15,6 +15,10 @@ ifneq (, $(filter y, $(CONFIG_QTI_QUIN_GVM) $(CONFIG_ARCH_KHAJE) $(CONFIG_ARCH_S
     qseecom_dlkm-objs := qseecom/qseecom.o
     ifdef CONFIG_COMPAT
         qseecom_dlkm-objs += qseecom/qseecom_32bit_impl.o
+    endif
+    ifeq ($(CONFIG_DSQB), y)
+        qseecom_dlkm-objs += qseecom/dsqb_sysfs.o
+        KBUILD_CPPFLAGS += -DENABLE_DSQB_SYSFS_NODE
     endif
 endif
 
