@@ -1126,8 +1126,16 @@ static long process_accept_req(struct server_info *si, struct smcinvoke_accept *
 			goto wait_on_request;
 
 		cb_txn = get_txn_for_state_transition(si, accept->txn_id, XST_PROCESSED);
-		if (!cb_txn)
-			return -EINVAL;
+		if (!cb_txn) {
+
+			/* We get here, if the invoke thread goes away, e.g. timed out or killed. */
+			/* In correct implementation we should return to userspace for the callback
+			 * server to cleanup. However, the libMinkDescriptor will kill the thread
+			 * if returns error. We stick to the wrong design :(.
+			 */
+
+			goto wait_on_request;
+		}
 
 		errno = accept->result;
 		if (!errno) {
@@ -1264,12 +1272,35 @@ static long server_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			return -EFAULT;
 
 		ret = process_accept_req(si, &accept);
-		if (!ret) {
+		if (ret == -ERESTARTSYS) {
+			struct smcinvoke_accept __user *a = (struct smcinvoke_accept __user *)arg;
 
-			/* TODO. We need to do some cleanup for 'process_accept_req'. */
+			/* BAD IOCTL UAPI DESIGN! */
 
-			if (copy_to_user((void __user *)arg, &accept, sizeof(accept)))
+			/* We do this because same IOCTL command has been used for two different
+			 * purposes (submit response + pick request). 'ERESTARTSYS' means we were
+			 * handling second part of the IOCTL when signal arrived.
+			 */
+
+			/* We need to reset 'has_resp' so if the IOCTL call restarted we
+			 * resume from second half of the IOCTL. I did not use an state for 'si'
+			 * as restart is not guaranteed.
+			 */
+
+			if (put_user(0, &a->has_resp))
 				return -EFAULT;
+
+		} else if (!ret) {
+
+			/* We picked a request; and submitted any pending response.*/
+			accept.has_resp = 0;
+
+			if (copy_to_user((void __user *)arg, &accept, sizeof(accept))) {
+
+				/* TODO. We need to do some cleanup for 'process_accept_req'. */
+
+				return -EFAULT;
+			}
 		}
 
 		break;
@@ -1359,11 +1390,20 @@ static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned lon
 
 	if (typeof_si_object(object) == SI_OT_ROOT) {
 		if ((u_req.op == IClientEnv_OP_notifyDomainChange) ||
-			(u_req.op == IClientEnv_OP_registerWithCredentials) ||
 			(u_req.op == IClientEnv_OP_adciAccept) ||
-			(u_req.op == IClientEnv_OP_adciShutdown))
+			(u_req.op == IClientEnv_OP_adciShutdown)) {
+			pr_err("invalid rootenv op\n");
 
 			return -EINVAL;
+		}
+
+		if (u_req.op == IClientEnv_OP_registerWithCredentials) {
+			if (u_req.counts != OBJECT_COUNTS_PACK(0, 0, 1, 1)) {
+				pr_err("IClientEnv_OP_registerWithCredentials: incorrect number of arguments.\n");
+
+				return -EINVAL;
+			}
+		}
 	}
 
 	if (u_req.argsize != sizeof(union smcinvoke_arg))
@@ -1396,6 +1436,17 @@ static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned lon
 		ret = -EFAULT;
 
 		goto out_failed;
+	}
+
+	if (typeof_si_object(object) == SI_OT_ROOT) {
+		if (u_req.op == IClientEnv_OP_registerWithCredentials) {
+			if (U_HANDLE_IS_NULL(u_args[0].o.fd)) {
+				pr_err("IClientEnv_OP_registerWithCredentials: privileged credential.\n");
+
+				ret = -EINVAL;
+				goto out_failed;
+			}
+		}
 	}
 
 	pr_info("%s object invocation with %d arguments (%04x) and op %d.\n",
@@ -1512,6 +1563,8 @@ static int qtee_release(struct inode *nodp, struct file *filp)
 	struct si_object *object = filp->private_data;
 
 	/* The matching 'get_si_object' is in 'get_u_handle_from_si_object'. */
+
+	pr_info("%s released.\n", si_object_name(object));
 
 	put_si_object(object);
 
