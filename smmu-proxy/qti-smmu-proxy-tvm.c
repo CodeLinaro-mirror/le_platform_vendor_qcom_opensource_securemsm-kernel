@@ -676,7 +676,7 @@ static int proxy_fault_handler(struct iommu_domain *domain, struct device *dev,
 {
 	dev_err(dev, "Context fault with IOVA %lx and fault flags %d\n", iova, flags);
 
-	return -EINVAL;
+	return -ENOSYS;
 }
 
 static int cb_probe_handler(struct device *dev)
