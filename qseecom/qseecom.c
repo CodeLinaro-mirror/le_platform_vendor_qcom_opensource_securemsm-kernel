@@ -1847,39 +1847,48 @@ static void __qseecom_processing_pending_lsnr_unregister(void)
 	int ret = 0;
 
 	mutex_lock(&listener_access_lock);
-	while (!list_empty(&qseecom.unregister_lsnr_pending_list_head)) {
+
+	if (!list_empty(&qseecom.unregister_lsnr_pending_list_head)) {
+
 		pos = qseecom.unregister_lsnr_pending_list_head.next;
-		entry = list_entry(pos,
+
+		do {
+			entry = list_entry(pos,
 				struct qseecom_unregister_pending_list, list);
-		if (entry && entry->data) {
-			pr_debug("process pending unregister %d\n",
-					entry->data->listener.id);
-			/* don't process the entry if qseecom_release is not called*/
-			if (!entry->data->listener.release_called) {
-				list_del(pos);
-				list_add_tail(&entry->list,
-					&qseecom.unregister_lsnr_pending_list_head);
-				break;
-			}
-			ptr_svc = __qseecom_find_svc(
+			if (entry && entry->data) {
+				pr_debug("process pending unregister %d\n",
 						entry->data->listener.id);
-			if (ptr_svc) {
-				ret = __qseecom_unregister_listener(
-						entry->data, ptr_svc);
-				if (ret) {
-					pr_debug("unregister %d pending again\n",
+				/* don't process the entry if qseecom_release is not called*/
+				if (!entry->data->listener.release_called) {
+					pr_err("listener release yet to be called for lstnr :%d\n",
 						entry->data->listener.id);
-					mutex_unlock(&listener_access_lock);
-					return;
+					pos = pos->next;
+					continue;
 				}
-			} else
-				pr_err("invalid listener %d\n",
-					entry->data->listener.id);
-			__qseecom_free_tzbuf(&entry->data->sglistinfo_shm);
-			kfree_sensitive(entry->data);
-		}
-		list_del(pos);
-		kfree_sensitive(entry);
+
+				ptr_svc = __qseecom_find_svc(
+						entry->data->listener.id);
+				pr_debug("Unregistering listener %d\n", entry->data->listener.id);
+				if (ptr_svc) {
+					ret = __qseecom_unregister_listener(
+							entry->data, ptr_svc);
+					if (ret) {
+						pr_debug("unregister %d pending again\n",
+								entry->data->listener.id);
+						mutex_unlock(&listener_access_lock);
+						return;
+					}
+				} else
+					pr_err("invalid listener %d\n",
+							entry->data->listener.id);
+				__qseecom_free_tzbuf(&entry->data->sglistinfo_shm);
+				kfree_sensitive(entry->data);
+			}
+
+			pos = pos->next;
+			list_del(pos->prev);
+			kfree_sensitive(entry);
+		} while (!list_is_head(pos, &qseecom.unregister_lsnr_pending_list_head));
 	}
 	mutex_unlock(&listener_access_lock);
 	wake_up_interruptible(&qseecom.register_lsnr_pending_wq);
@@ -5447,79 +5456,7 @@ static int __qseecom_send_command(struct qseecom_handle *handle, void *send_buf,
 	return ret;
 }
 
-#if IS_ENABLED(CONFIG_QSEECOM)
-#if IS_ENABLED(CONFIG_QSEECOM_PROXY)
-const static struct qseecom_drv_ops qseecom_driver_ops = {
-       .qseecom_send_command = __qseecom_send_command,
-       .qseecom_start_app = __qseecom_start_app,
-       .qseecom_shutdown_app = __qseecom_shutdown_app,
-};
-
-int get_qseecom_kernel_fun_ops(void)
-{
-    return provide_qseecom_kernel_fun_ops(&qseecom_driver_ops);
-}
-
-#else
-
-int qseecom_start_app(struct qseecom_handle **handle,
-                    char *app_name, uint32_t size)
-{
-    return __qseecom_start_app(handle, app_name, size);
-}
-EXPORT_SYMBOL(qseecom_start_app);
-
-int qseecom_shutdown_app(struct qseecom_handle **handle)
-{
-    return __qseecom_shutdown_app(handle);
-}
-EXPORT_SYMBOL(qseecom_shutdown_app);
-
-int qseecom_send_command(struct qseecom_handle *handle, void *send_buf,
-            uint32_t sbuf_len, void *resp_buf, uint32_t rbuf_len)
-{
-    return __qseecom_send_command(handle, send_buf, sbuf_len,
-                        resp_buf, rbuf_len);
-}
-EXPORT_SYMBOL(qseecom_send_command);
-#endif
-#endif
-
-int qseecom_set_bandwidth(struct qseecom_handle *handle, bool high)
-{
-	int ret = 0;
-
-	if ((handle == NULL) || (handle->dev == NULL)) {
-		pr_err("No valid kernel client\n");
-		return -EINVAL;
-	}
-	if (high) {
-		if (qseecom.support_bus_scaling) {
-			mutex_lock(&qsee_bw_mutex);
-			__qseecom_register_bus_bandwidth_needs(handle->dev,
-									HIGH);
-			mutex_unlock(&qsee_bw_mutex);
-		} else {
-			ret = qseecom_perf_enable(handle->dev);
-			if (ret)
-				pr_err("Failed to vote for clock with err %d\n",
-						ret);
-		}
-	} else {
-		if (!qseecom.support_bus_scaling) {
-			qsee_disable_clock_vote(handle->dev, CLK_DFAB);
-			qsee_disable_clock_vote(handle->dev, CLK_SFPB);
-		} else {
-			mutex_lock(&qsee_bw_mutex);
-			qseecom_unregister_bus_bandwidth_needs(handle->dev);
-			mutex_unlock(&qsee_bw_mutex);
-		}
-	}
-	return ret;
-}
-EXPORT_SYMBOL(qseecom_set_bandwidth);
-
-int qseecom_process_listener_from_smcinvoke(uint32_t *result,
+static int __qseecom_process_listener_from_smcinvoke(uint32_t *result,
 		u64 *response_type, unsigned int *data)
 {
 	struct qseecom_registered_app_list dummy_app_entry;
@@ -5564,8 +5501,91 @@ int qseecom_process_listener_from_smcinvoke(uint32_t *result,
 	*data = resp.data;
 	return ret;
 }
-EXPORT_SYMBOL(qseecom_process_listener_from_smcinvoke);
+
+#if IS_ENABLED(CONFIG_QSEECOM)
+#if IS_ENABLED(CONFIG_QSEECOM_PROXY)
+const static struct qseecom_drv_ops qseecom_driver_ops = {
+	.qseecom_send_command = __qseecom_send_command,
+	.qseecom_start_app = __qseecom_start_app,
+	.qseecom_shutdown_app = __qseecom_shutdown_app,
+	.qseecom_process_listener_from_smcinvoke = __qseecom_process_listener_from_smcinvoke,
+};
+
+int get_qseecom_kernel_fun_ops(void)
+{
+    return provide_qseecom_kernel_fun_ops(&qseecom_driver_ops);
+}
+
+#else
+
+int qseecom_start_app(struct qseecom_handle **handle,
+		char *app_name, uint32_t size)
+{
+	return __qseecom_start_app(handle, app_name, size);
+}
+EXPORT_SYMBOL_GPL(qseecom_start_app);
+
+int qseecom_shutdown_app(struct qseecom_handle **handle)
+{
+	return __qseecom_shutdown_app(handle);
+}
+EXPORT_SYMBOL_GPL(qseecom_shutdown_app);
+
+int qseecom_send_command(struct qseecom_handle *handle, void *send_buf,
+		uint32_t sbuf_len, void *resp_buf, uint32_t rbuf_len)
+{
+	return __qseecom_send_command(handle, send_buf, sbuf_len,
+			resp_buf, rbuf_len);
+}
+EXPORT_SYMBOL_GPL(qseecom_send_command);
+
+int qseecom_process_listener_from_smcinvoke(uint32_t *result,
+		u64 *response_type, unsigned int *data)
+{
+	return __qseecom_process_listener_from_smcinvoke(result,
+			response_type, data);
+}
+EXPORT_SYMBOL_GPL(qseecom_process_listener_from_smcinvoke);
+
+
 #endif
+#endif
+
+int qseecom_set_bandwidth(struct qseecom_handle *handle, bool high)
+{
+	int ret = 0;
+
+	if ((handle == NULL) || (handle->dev == NULL)) {
+		pr_err("No valid kernel client\n");
+		return -EINVAL;
+	}
+	if (high) {
+		if (qseecom.support_bus_scaling) {
+			mutex_lock(&qsee_bw_mutex);
+			__qseecom_register_bus_bandwidth_needs(handle->dev,
+									HIGH);
+			mutex_unlock(&qsee_bw_mutex);
+		} else {
+			ret = qseecom_perf_enable(handle->dev);
+			if (ret)
+				pr_err("Failed to vote for clock with err %d\n",
+						ret);
+		}
+	} else {
+		if (!qseecom.support_bus_scaling) {
+			qsee_disable_clock_vote(handle->dev, CLK_DFAB);
+			qsee_disable_clock_vote(handle->dev, CLK_SFPB);
+		} else {
+			mutex_lock(&qsee_bw_mutex);
+			qseecom_unregister_bus_bandwidth_needs(handle->dev);
+			mutex_unlock(&qsee_bw_mutex);
+		}
+	}
+	return ret;
+}
+EXPORT_SYMBOL(qseecom_set_bandwidth);
+#endif
+
 static int qseecom_send_resp(void)
 {
 	qseecom.send_resp_flag = 1;
