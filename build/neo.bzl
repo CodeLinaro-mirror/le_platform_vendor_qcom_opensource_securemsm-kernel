@@ -2,7 +2,7 @@ load(":securemsm_kernel.bzl", "define_consolidate_gki_modules")
 
 def define_neo():
     define_consolidate_gki_modules(
-        target = "neo",
+        target = "neo-la",
         modules = [
             "smcinvoke_dlkm",
             "tz_log_dlkm",
