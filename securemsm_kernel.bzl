@@ -61,7 +61,7 @@ def _get_module_srcs(target, variant, module, options):
 
     return globbed_srcs
 
-def define_target_variant_modules(target, variant, modules, extra_options = [], config_option = None):
+def define_target_variant_modules(target, variant, modules, extra_options = [], config_option = None, vm_target = False):
     kernel_build_variant = "{}_{}".format(target, variant)
     options = _get_options(target, variant, config_option, modules, extra_options)
     module_rules = []
@@ -74,7 +74,6 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
             "//soc-repo:all_headers",
             "//soc-repo:{}/drivers/soc/qcom/mem_buf/mem_buf_dev".format(kernel_build_variant),
             "//soc-repo:{}/drivers/firmware/qcom/qcom-scm".format(kernel_build_variant),
-            "//soc-repo:{}/drivers/soc/qcom/sps/sps_drv".format(kernel_build_variant),
             "//soc-repo:{}/drivers/firmware/qcom/si_core/si_core_module".format(kernel_build_variant),
             "//soc-repo:{}/drivers/firmware/qcom/si_core/mem_object".format(kernel_build_variant),
             "//soc-repo:{}/drivers/virt/gunyah/gh_msgq".format(kernel_build_variant),
@@ -86,6 +85,13 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
         "//build/kernel/kleaf:socrepo_true": "//soc-repo:{}_base_kernel".format(tv),
         "//build/kernel/kleaf:socrepo_false": "//msm-kernel:{}".format(tv),
     })
+    if not vm_target:
+        deps += select({
+            "//build/kernel/kleaf:socrepo_true": [
+                "//soc-repo:{}/drivers/soc/qcom/sps/sps_drv".format(kernel_build_variant),
+            ],
+            "//build/kernel/kleaf:socrepo_false": [],
+        })
     if target == "sun":
         deps += select({
             "//build/kernel/kleaf:socrepo_true": [
@@ -135,3 +141,7 @@ def define_consolidate_gki_modules(target, modules, extra_options = [], config_o
     define_target_variant_modules(target, "consolidate", modules, extra_options, config_option)
     define_target_variant_modules(target, "gki", modules, extra_options, config_option)
     define_target_variant_modules(target, "perf", modules, extra_options, config_option)
+
+def define_vm_modules(target, modules, extra_options = [], config_option = None):
+    define_target_variant_modules(target, "debug-defconfig", modules, extra_options, config_option, vm_target = True)
+    define_target_variant_modules(target, "defconfig", modules, extra_options, config_option, vm_target = True)
