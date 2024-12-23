@@ -768,7 +768,12 @@ static int cb_probe_handler(struct device *dev)
 
 	dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
 
+     /* Is address bus to Camera HW of 32bits or 36bits */
+#if IS_ENABLED(CONFIG_QCOM_LEGACY_ADDRESS_BUS_SIZE)
+	ret = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(32));
+#else
 	ret = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(64));
+#endif
 	if (ret) {
 		dev_err(dev, "Failed to set DMA-MASK\n");
 		return ret;

@@ -37,6 +37,7 @@ int smmu_proxy_get_csf_version(struct csf_version *csf_version)
 	if (ret) {
 		pr_err("%s: Failed to get env object rc: %d\n", __func__,
 		       ret);
+		Object_release(client_env);
 		return ret;
 	}
 
