@@ -495,6 +495,7 @@ static int start_cipher_req(struct qcedev_control *podev,
 	creq.ivsize = qcedev_areq->cipher_op_req.ivlen;
 	creq.iv_ctr_size = 0;
 
+	creq.key_index = 0;
 	creq.enckey =  &qcedev_areq->cipher_op_req.enckey[0];
 	creq.encklen = qcedev_areq->cipher_op_req.encklen;
 
@@ -556,13 +557,13 @@ void qcedev_offload_cipher_req_cb(void *cookie, unsigned char *icv,
 
 	if (iv && qcedev_areq)
 		memcpy(&qcedev_areq->offload_cipher_op_req.iv[0], iv,
-			qcedev_areq->offload_cipher_op_req.ivlen);
+		       qcedev_areq->offload_cipher_op_req.iv_len);
 
 	tasklet_schedule(&podev->done_tasklet);
 }
 
 static int start_offload_cipher_req(struct qcedev_control *podev,
-				int *current_req_info)
+				    int *current_req_info)
 {
 	struct qcedev_async_req *qcedev_areq;
 	struct qce_req creq;
@@ -597,7 +598,7 @@ static int start_offload_cipher_req(struct qcedev_control *podev,
 	    qcedev_areq->offload_cipher_op_req.encrypt) {
 		creq.dir = QCE_ENCRYPT;
 	} else {
-		switch(qcedev_areq->offload_cipher_op_req.op) {
+		switch (qcedev_areq->offload_cipher_op_req.op) {
 		case QCEDEV_OFFLOAD_HLOS_HLOS:
 		case QCEDEV_OFFLOAD_HLOS_HLOS_1:
 		case QCEDEV_OFFLOAD_HLOS_CPB:
@@ -613,10 +614,28 @@ static int start_offload_cipher_req(struct qcedev_control *podev,
 	}
 
 	creq.iv = &qcedev_areq->offload_cipher_op_req.iv[0];
-	creq.ivsize = qcedev_areq->offload_cipher_op_req.ivlen;
+	creq.ivsize = qcedev_areq->offload_cipher_op_req.iv_len;
 	creq.iv_ctr_size = qcedev_areq->offload_cipher_op_req.iv_ctr_size;
 
-	creq.encklen = qcedev_areq->offload_cipher_op_req.encklen;
+	switch (qcedev_areq->offload_cipher_op_req.key.key_type) {
+	case QCEDEV_KEY_TYPE_LEGACY_PIPE_KEY:
+		creq.key_index = QCE_KEY_INDEX_INVALID;
+		break;
+	case QCEDEV_KEY_TYPE_GP_KEY_INDEX:
+	case QCEDEV_KEY_TYPE_DRM_KEY_INDEX:
+		creq.key_index =
+			qcedev_areq->offload_cipher_op_req.key.key_index;
+		break;
+	case QCEDEV_KEY_TYPE_SOFTWARE_KEY:
+		creq.enckey =
+			qcedev_areq->offload_cipher_op_req.key.software_key;
+		break;
+	default:
+		pr_err("%s: Unknown key type enum: %d\n", __func__,
+		       qcedev_areq->offload_cipher_op_req.key.key_type);
+		return -EINVAL;
+	}
+	creq.encklen = qcedev_areq->offload_cipher_op_req.key.key_length;
 
 	/* OFFLOAD use cases use PIPE keys so no need to set keys */
 	creq.flags = QCEDEV_CTX_USE_PIPE_KEY;
@@ -641,10 +660,11 @@ static int start_offload_cipher_req(struct qcedev_control *podev,
 			creq.pattern_info |= (patt_sz - 1) << 4;
 		if (proc_data_sz)
 			creq.pattern_info |= (proc_data_sz - 1) << 8;
-		creq.pattern_info |=
-		qcedev_areq->offload_cipher_op_req.pattern_info.patt_offset << 12;
+		creq.pattern_info |= qcedev_areq->offload_cipher_op_req
+					     .pattern_info.patt_offset
+				     << 12;
 	}
-	creq.block_offset = qcedev_areq->offload_cipher_op_req.block_offset;
+	creq.block_offset = qcedev_areq->offload_cipher_op_req.byte_offset;
 	ret = qce_ablk_cipher_req(podev->qce, &creq);
 
 	*current_req_info = creq.current_req_info;
@@ -720,6 +740,7 @@ static int start_sha_req(struct qcedev_control *podev,
 	sreq.src = qcedev_areq->sha_req.sreq.src;
 	sreq.areq = (void *)&qcedev_areq->sha_req;
 	sreq.flags = 0;
+	sreq.key_index = 0;
 
 	ret = qce_process_sha_req(podev->qce, &sreq);
 
@@ -729,10 +750,10 @@ static int start_sha_req(struct qcedev_control *podev,
 	return ret;
 };
 
-static void qcedev_check_crypto_status(
-			struct qcedev_async_req *qcedev_areq, void *handle)
+static void qcedev_check_crypto_status(struct qcedev_async_req *qcedev_areq,
+				       void *handle)
 {
-	struct qce_error error = {0};
+	struct qce_error error = { 0 };
 
 	qcedev_areq->offload_cipher_op_req.err = QCEDEV_OFFLOAD_NO_ERROR;
 	qce_get_crypto_status(handle, &error);
@@ -746,6 +767,21 @@ static void qcedev_check_crypto_status(
 	} else if (error.generic_error) {
 		qcedev_areq->offload_cipher_op_req.err =
 			QCEDEV_OFFLOAD_GENERIC_ERROR;
+	} else if (error.key_index_oob) {
+		qcedev_areq->offload_cipher_op_req.err =
+			QCEDEV_OFFLOAD_KEY_INDEX_OUT_OF_BOUNDS_ERROR;
+	} else if (error.key_usage) {
+		qcedev_areq->offload_cipher_op_req.err =
+			QCEDEV_OFFLOAD_KEY_USAGE_ERROR;
+	} else if (error.key_size) {
+		qcedev_areq->offload_cipher_op_req.err =
+			QCEDEV_OFFLOAD_KEY_SIZE_ERROR;
+	} else if (error.key_auth) {
+		qcedev_areq->offload_cipher_op_req.err =
+			QCEDEV_OFFLOAD_KEY_PERM_ERROR;
+	} else if (error.key_empty) {
+		qcedev_areq->offload_cipher_op_req.err =
+			QCEDEV_OFFLOAD_KEY_EMPTY_ERROR;
 	}
 
 	return;
@@ -1731,21 +1767,23 @@ static int qcedev_vbuf_ablk_cipher(struct qcedev_async_req *areq,
 }
 
 static int qcedev_smmu_ablk_offload_cipher(struct qcedev_async_req *areq,
-				       struct qcedev_handle *handle)
+					   struct qcedev_handle *handle)
 {
 	int i = 0;
+	u8 byte_offset = 0;
 	int err = 0;
-	size_t byteoffset = 0;
 	size_t transfer_data_len = 0;
 	size_t pending_data_len = 0;
-	size_t max_data_xfer = MAX_CEHW_REQ_TRANSFER_SIZE - byteoffset;
+	size_t max_data_xfer = MAX_CEHW_REQ_TRANSFER_SIZE - byte_offset;
 	uint8_t *user_src = NULL;
 	uint8_t *user_dst = NULL;
 	struct scatterlist sg_src;
 	struct scatterlist sg_dst;
+	bool partial_blocks_allowed = areq->offload_cipher_op_req.mode ==
+				      QCEDEV_AES_MODE_CTR;
 
-	if (areq->offload_cipher_op_req.mode == QCEDEV_AES_MODE_CTR)
-		byteoffset = areq->offload_cipher_op_req.byteoffset;
+	if (partial_blocks_allowed)
+		byte_offset = areq->offload_cipher_op_req.byte_offset;
 
 	/*
 	 * areq has two components:
@@ -1759,20 +1797,17 @@ static int qcedev_smmu_ablk_offload_cipher(struct qcedev_async_req *areq,
 	sg_init_table(&sg_src, 1);
 	sg_init_table(&sg_dst, 1);
 
-	for (i = 0; i < areq->offload_cipher_op_req.entries; i++) {
+	for (i = 0; i < areq->offload_cipher_op_req.vbuf.entries; i++) {
 		transfer_data_len = 0;
 		pending_data_len = areq->offload_cipher_op_req.vbuf.src[i].len;
 		user_src = areq->offload_cipher_op_req.vbuf.src[i].vaddr;
-		user_src += byteoffset;
-
 		user_dst = areq->offload_cipher_op_req.vbuf.dst[i].vaddr;
-		user_dst += byteoffset;
 
 		areq->cipher_req.creq.iv = areq->offload_cipher_op_req.iv;
 
 		while (pending_data_len) {
-			transfer_data_len = min(max_data_xfer,
-						pending_data_len);
+			transfer_data_len =
+				min(max_data_xfer, pending_data_len);
 			sg_src.dma_address = (dma_addr_t)user_src;
 			sg_dst.dma_address = (dma_addr_t)user_dst;
 			areq->cipher_req.creq.cryptlen = transfer_data_len;
@@ -1780,10 +1815,14 @@ static int qcedev_smmu_ablk_offload_cipher(struct qcedev_async_req *areq,
 			sg_src.length = transfer_data_len;
 			sg_dst.length = transfer_data_len;
 
+			areq->offload_cipher_op_req.byte_offset = byte_offset;
+			/* byteoffset for next block is the remaining bytes. */
+			byte_offset = 0; /* TEMP */
+
 			err = submit_req(areq, handle);
 			if (err) {
 				pr_err("%s: Error processing req, err = %d\n",
-						__func__, err);
+				       __func__, err);
 				goto exit;
 			}
 			/* update data len to be processed */
@@ -1798,8 +1837,8 @@ exit:
 	return err;
 }
 
-static int qcedev_check_cipher_key(struct qcedev_cipher_op_req *req,
-						struct qcedev_control *podev)
+static int qcedev_check_key(struct qcedev_cipher_op_req *req,
+			    struct qcedev_control *podev)
 {
 	/* if intending to use HW key make sure key fields are set
 	 * correctly and HW key is indeed supported in target
@@ -1880,7 +1919,7 @@ static int qcedev_check_cipher_params(struct qcedev_cipher_op_req *req,
 		goto error;
 	}
 	if (req->alg == QCEDEV_ALG_AES) {
-		if (qcedev_check_cipher_key(req, podev))
+		if (qcedev_check_key(req, podev))
 			goto error;
 
 	}
@@ -2044,17 +2083,19 @@ sha_error:
 	return -EINVAL;
 }
 
-static int qcedev_check_offload_cipher_key(struct qcedev_offload_cipher_op_req *req,
-				       struct qcedev_control *podev)
+static int qcedev_check_offload_key(struct qcedev_extended_cipher_req *req,
+				    struct qcedev_control *podev)
 {
-	if (req->encklen == 0)
+	if (req->key.key_type == QCEDEV_KEY_TYPE_NO_KEY)
+		return -EINVAL;
+	if (req->key.key_length == 0)
 		return -EINVAL;
 
 	/* AES-192 is not a valid option for OFFLOAD use case */
-	if ((req->encklen != QCEDEV_AES_KEY_128) &&
-			(req->encklen != QCEDEV_AES_KEY_256)) {
-		pr_err("%s: unsupported key size %d\n",
-					__func__, req->encklen);
+	if ((req->key.key_length != QCEDEV_AES_KEY_128) &&
+	    (req->key.key_length != QCEDEV_AES_KEY_256)) {
+		pr_err("%s: unsupported key size %d\n", __func__,
+		       req->key.key_length);
 		goto error;
 	}
 
@@ -2063,14 +2104,15 @@ error:
 	return -EINVAL;
 }
 
-static int qcedev_check_offload_cipher_params(struct qcedev_offload_cipher_op_req *req,
-					  struct qcedev_control *podev)
+static int
+qcedev_check_extended_cipher_params(struct qcedev_extended_cipher_req *req,
+				    struct qcedev_control *podev)
 {
 	uint32_t total = 0;
 	int i = 0;
 
-	if ((req->entries == 0) || (req->data_len == 0) ||
-		(req->entries > QCEDEV_MAX_BUFFERS)) {
+	if ((req->vbuf.entries == 0) || (req->data_len == 0) ||
+		(req->vbuf.entries > QCEDEV_MAX_BUFFERS)) {
 		pr_err("%s: Invalid cipher length/entries\n", __func__);
 		goto error;
 	}
@@ -2082,25 +2124,22 @@ static int qcedev_check_offload_cipher_params(struct qcedev_offload_cipher_op_re
 		goto error;
 	}
 
-	if (qcedev_check_offload_cipher_key(req, podev))
-		goto error;
-
-	if (req->block_offset >= AES_CE_BLOCK_SIZE)
+	if (qcedev_check_offload_key(req, podev))
 		goto error;
 
 	/* if using a byteoffset, make sure it is CTR mode using vbuf */
-	if (req->byteoffset) {
+	if (req->byte_offset) {
 		if (req->mode != QCEDEV_AES_MODE_CTR) {
 			pr_err("%s: Operation on byte offset not supported\n",
 						__func__);
 			goto error;
 		}
-		if (req->byteoffset >= AES_CE_BLOCK_SIZE) {
+		if (req->byte_offset >= AES_CE_BLOCK_SIZE) {
 			pr_err("%s: Invalid byte offset\n", __func__);
 			goto error;
 		}
-		total = req->byteoffset;
-		for (i = 0; i < req->entries; i++) {
+		total = req->byte_offset;
+		for (i = 0; i < req->vbuf.entries; i++) {
 			if (total > U32_MAX - req->vbuf.src[i].len) {
 				pr_err("%s:Int overflow on total src len\n",
 						__func__);
@@ -2110,29 +2149,22 @@ static int qcedev_check_offload_cipher_params(struct qcedev_offload_cipher_op_re
 		}
 	}
 
-	if (req->data_len < req->byteoffset) {
-		pr_err("%s: req data length %u is less than byteoffset %u\n",
-				__func__, req->data_len, req->byteoffset);
+	if (req->data_len < req->byte_offset) {
+		pr_err("%s: req data length %llu is less than byteoffset %u\n",
+				__func__, req->data_len, req->byte_offset);
 		goto error;
 	}
 
 	/* Ensure IV size */
-	if (req->ivlen > QCEDEV_MAX_IV_SIZE) {
-		pr_err("%s: ivlen is not correct: %u\n", __func__, req->ivlen);
-		goto error;
-	}
-
-	/* Ensure Key size */
-	if (req->encklen > QCEDEV_MAX_KEY_SIZE) {
-		pr_err("%s: Klen is not correct: %u\n", __func__,
-						req->encklen);
+	if (req->iv_len > QCEDEV_MAX_IV_SIZE) {
+		pr_err("%s: ivlen is not correct: %u\n", __func__, req->iv_len);
 		goto error;
 	}
 
 	/* Check for sum of all dst length is equal to data_len  */
-	for (i = 0, total = 0; i < req->entries; i++) {
+	for (i = 0, total = 0; i < req->vbuf.entries; i++) {
 		if (!req->vbuf.dst[i].vaddr && req->vbuf.dst[i].len) {
-			pr_err("%s: NULL req dst vbuf[%d] with length %d\n",
+			pr_err("%s: NULL req dst vbuf[%d] with length %llu\n",
 					__func__, i, req->vbuf.dst[i].len);
 			goto error;
 		}
@@ -2145,15 +2177,15 @@ static int qcedev_check_offload_cipher_params(struct qcedev_offload_cipher_op_re
 	}
 
 	if (total != req->data_len) {
-		pr_err("%s: Total (i=%d) dst(%d) buf size != data_len (%d)\n",
+		pr_err("%s: Total (i=%d) dst(%d) buf size != data_len (%llu)\n",
 					__func__, i, total, req->data_len);
 		goto error;
 	}
 
 	/* Check for sum of all src length is equal to data_len  */
-	for (i = 0, total = 0; i < req->entries; i++) {
+	for (i = 0, total = 0; i < req->vbuf.entries; i++) {
 		if (!req->vbuf.src[i].vaddr && req->vbuf.src[i].len) {
-			pr_err("%s: NULL req src vbuf[%d] with length %d\n",
+			pr_err("%s: NULL req src vbuf[%d] with length %llu\n",
 					__func__, i, req->vbuf.src[i].len);
 			goto error;
 		}
@@ -2166,7 +2198,7 @@ static int qcedev_check_offload_cipher_params(struct qcedev_offload_cipher_op_re
 	}
 
 	if (total != req->data_len) {
-		pr_err("%s: Total src(%d) buf size != data_len (%d)\n",
+		pr_err("%s: Total src(%d) buf size != data_len (%llu)\n",
 				__func__, total, req->data_len);
 		goto error;
 	}
@@ -2174,6 +2206,109 @@ static int qcedev_check_offload_cipher_params(struct qcedev_offload_cipher_op_re
 	return 0;
 error:
 	return -EINVAL;
+}
+
+void qcedev_offload_translate_to_areq(
+	struct qcedev_async_req *areq,
+	struct qcedev_offload_cipher_op_req *legacy_op)
+{
+	struct qcedev_extended_cipher_req *new_op =
+		&areq->offload_cipher_op_req;
+
+	memset(new_op, 0, sizeof(*new_op));
+
+	for (int i = 0; i < QCEDEV_MAX_BUFFERS; i++) {
+		new_op->vbuf.src[i].len = legacy_op->vbuf.src[i].len;
+		new_op->vbuf.src[i].vaddr = legacy_op->vbuf.src[i].vaddr;
+		new_op->vbuf.dst[i].len = legacy_op->vbuf.dst[i].len;
+		new_op->vbuf.dst[i].vaddr = legacy_op->vbuf.dst[i].vaddr;
+	}
+	memcpy(new_op->iv, legacy_op->iv, QCEDEV_MAX_IV_SIZE);
+	new_op->vbuf.entries = legacy_op->entries;
+	new_op->iv_ctr_size = legacy_op->iv_ctr_size;
+	new_op->iv_len = legacy_op->ivlen;
+	new_op->data_len = legacy_op->data_len;
+
+	/* Previously, these held the same role, only one was set, take the max. */
+	new_op->byte_offset =
+		max(legacy_op->block_offset, legacy_op->byteoffset);
+	/* Block offset was now means something different, read description. */
+	new_op->block_offset = 0;
+	new_op->encrypt = legacy_op->encrypt;
+	new_op->is_pattern_valid = legacy_op->is_pattern_valid;
+	new_op->is_copy_op = legacy_op->is_copy_op;
+	new_op->in_place_op = legacy_op->in_place_op;
+	new_op->pattern_info = legacy_op->pattern_info;
+	new_op->alg = legacy_op->alg;
+	new_op->mode = legacy_op->mode;
+	new_op->op = legacy_op->op;
+	new_op->err = legacy_op->err;
+	new_op->key.key_length = legacy_op->encklen;
+	new_op->key.key_type = QCEDEV_KEY_TYPE_LEGACY_PIPE_KEY;
+
+	memset(new_op->mac, 0, QCEDEV_MAX_MAC_SIZE);
+	new_op->mac_len = 0;
+	new_op->aad_len = 0;
+}
+
+long qcedev_offload_ioctl(struct qcedev_handle *handle,
+			  struct qcedev_control *podev,
+			  struct qcedev_async_req *qcedev_areq, long arg)
+{
+	long err = 0;
+	struct qcedev_offload_cipher_op_req temp;
+	struct qcedev_extended_cipher_req *ext_req =
+		&qcedev_areq->offload_cipher_op_req;
+
+	K_COPY_FROM_USER(err, &temp, arg, sizeof(temp));
+	if (err)
+		return -EFAULT;
+
+	qcedev_offload_translate_to_areq(qcedev_areq, &temp);
+	qcedev_areq->op_type = QCEDEV_CRYPTO_OPER_OFFLOAD_CIPHER;
+	if (qcedev_check_extended_cipher_params(ext_req, podev))
+		return -EINVAL;
+	ext_req->err = QCEDEV_OFFLOAD_NO_ERROR;
+	err = qcedev_smmu_ablk_offload_cipher(qcedev_areq, handle);
+	if (err)
+		return err;
+
+	/* Copy back all out params. */
+	memcpy(temp.iv, ext_req->iv, sizeof(temp.iv));
+	temp.err = ext_req->err;
+
+	K_COPY_TO_USER(err, arg, &temp, sizeof(temp));
+	if (err)
+		return -EFAULT;
+	return err;
+}
+
+long qcedev_ext_cipher_ioctl(struct qcedev_handle *handle,
+			     struct qcedev_control *podev,
+			     struct qcedev_async_req *qcedev_areq, long arg)
+{
+	long err = 0;
+	struct qcedev_extended_cipher_req *ext_req =
+		&qcedev_areq->offload_cipher_op_req;
+
+	K_COPY_FROM_USER(err, &qcedev_areq->offload_cipher_op_req, arg,
+			 sizeof(struct qcedev_extended_cipher_req));
+	if (err)
+		return -EFAULT;
+
+	qcedev_areq->op_type = QCEDEV_CRYPTO_OPER_OFFLOAD_CIPHER;
+	if (qcedev_check_extended_cipher_params(ext_req, podev))
+		return -EINVAL;
+	ext_req->err = QCEDEV_OFFLOAD_NO_ERROR;
+	err = qcedev_smmu_ablk_offload_cipher(qcedev_areq, handle);
+	if (err)
+		return err;
+
+	K_COPY_TO_USER(err, arg, &qcedev_areq->offload_cipher_op_req,
+		       sizeof(struct qcedev_extended_cipher_req));
+	if (err)
+		return -EFAULT;
+	return err;
 }
 
 long qcedev_ioctl(struct file *file,
@@ -2238,30 +2373,14 @@ long qcedev_ioctl(struct file *file,
 		break;
 
 	case QCEDEV_IOCTL_OFFLOAD_OP_REQ:
-		K_COPY_FROM_USER(err, &qcedev_areq->offload_cipher_op_req,
-				arg, sizeof(struct qcedev_offload_cipher_op_req));
-		if (err) {
-			err = -EFAULT;
-			goto exit_free_qcedev_areq;
-		}
-		qcedev_areq->op_type = QCEDEV_CRYPTO_OPER_OFFLOAD_CIPHER;
-		if (qcedev_check_offload_cipher_params(
-				&qcedev_areq->offload_cipher_op_req, podev)) {
-			err = -EINVAL;
-			goto exit_free_qcedev_areq;
-		}
-		qcedev_areq->offload_cipher_op_req.err = QCEDEV_OFFLOAD_NO_ERROR;
-		err = qcedev_smmu_ablk_offload_cipher(qcedev_areq, handle);
+		err = qcedev_offload_ioctl(handle, podev, qcedev_areq, arg);
 		if (err)
 			goto exit_free_qcedev_areq;
-
-		K_COPY_TO_USER(err, arg,
-				&qcedev_areq->offload_cipher_op_req,
-				sizeof(struct qcedev_offload_cipher_op_req));
-		if (err) {
-			err = -EFAULT;
+		break;
+	case QCEDEV_IOCTL_EXT_CIPHER_OP_REQ:
+		err = qcedev_ext_cipher_ioctl(handle, podev, qcedev_areq, arg);
+		if (err)
 			goto exit_free_qcedev_areq;
-		}
 		break;
 
 	case QCEDEV_IOCTL_SHA_INIT_REQ:

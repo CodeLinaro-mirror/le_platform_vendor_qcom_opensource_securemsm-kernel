@@ -69,6 +69,31 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
     modules = [securemsm_modules[module_name] for module_name in modules]
     tv = "{}_{}".format(target, variant)
 
+    deps = select({
+        "//build/kernel/kleaf:socrepo_true": [
+            "//soc-repo:all_headers",
+            "//soc-repo:{}/drivers/soc/qcom/mem_buf/mem_buf_dev".format(kernel_build_variant),
+            "//soc-repo:{}/drivers/firmware/qcom/qcom-scm".format(kernel_build_variant),
+            "//soc-repo:{}/drivers/soc/qcom/sps/sps_drv".format(kernel_build_variant),
+            "//soc-repo:{}/drivers/firmware/qcom/si_core/si_core_module".format(kernel_build_variant),
+            "//soc-repo:{}/drivers/firmware/qcom/si_core/mem_object".format(kernel_build_variant),
+            "//soc-repo:{}/drivers/virt/gunyah/gh_msgq".format(kernel_build_variant),
+            "//soc-repo:{}/drivers/dma-buf/heaps/qcom_dma_heaps".format(kernel_build_variant),
+        ],
+        "//build/kernel/kleaf:socrepo_false": ["//msm-kernel:all_headers"],
+    })
+    kernel_build = select({
+        "//build/kernel/kleaf:socrepo_true": "//soc-repo:{}_base_kernel".format(tv),
+        "//build/kernel/kleaf:socrepo_false": "//msm-kernel:{}".format(tv),
+    })
+    if target == "sun":
+        deps += select({
+            "//build/kernel/kleaf:socrepo_true": [
+                "//soc-repo:{}/drivers/misc/qseecom_proxy".format(kernel_build_variant),
+            ],
+            "//build/kernel/kleaf:socrepo_false": [],
+        })
+
     target_local_defines = ["SMCINVOKE_TRACE_INCLUDE_PATH=../../../{}/smcinvoke/compat".format(native.package_name())]
 
     for config in extra_options:
@@ -79,10 +104,10 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
 
         ddk_module(
             name = rule_name,
-            kernel_build = "//msm-kernel:{}".format(kernel_build_variant),
+            kernel_build = kernel_build,
             srcs = module_srcs,
             out = "{}.ko".format(module["name"]),
-            deps = ["//msm-kernel:all_headers"] + [_replace_formatting_codes(target, variant, dep) for dep in module["deps"]],
+            deps = deps + [_replace_formatting_codes(target, variant, dep) for dep in module["deps"]],
             hdrs = module["hdrs"],
             local_defines = target_local_defines,
             copts = module["copts"],
@@ -102,7 +127,7 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
 
     kernel_modules_install(
         name = "{}_modules_install".format(kernel_build_variant),
-        kernel_build = "//msm-kernel:{}".format(kernel_build_variant),
+        kernel_build = kernel_build,
         kernel_modules = module_rules,
     )
 
