@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/kthread.h>
@@ -766,11 +766,7 @@ static int cb_probe_handler(struct device *dev)
 		return -EINVAL;
 	}
 
-	ret = dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
-	if (ret) {
-		dev_err(dev, "Failed to set segment size\n");
-		return ret;
-	}
+	dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
 
 	ret = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(64));
 	if (ret) {
