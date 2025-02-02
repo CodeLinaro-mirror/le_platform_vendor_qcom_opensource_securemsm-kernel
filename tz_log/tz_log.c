@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
-#define pr_fmt(fmt) "%s:[%s][%d]: " fmt, KBUILD_MODNAME, __func__, __LINE__
+#define pr_fmt(fmt) "tz_log :[%s][%d]: " fmt, __func__, __LINE__
 
 #include <linux/debugfs.h>
 #include <linux/errno.h>
@@ -438,6 +438,7 @@ struct tzdbg {
 	bool is_hyplog_enabled;
 	uint32_t tz_version;
 	bool is_encrypted_log_enabled;
+	bool is_tz_qsee_log_enabled;
 	bool is_enlarged_buf;
 	bool is_full_encrypted_tz_logs_supported;
 	bool is_full_encrypted_tz_logs_enabled;
@@ -1164,6 +1165,9 @@ static int _disp_qsee_log_stats(size_t count)
 	static struct tzdbg_log_pos_t log_start = {0};
 	static struct tzdbg_log_pos_v2_t log_start_v2 = {0};
 
+	if (!tzdbg.is_tz_qsee_log_enabled)
+		return 0;
+
 	if (!tzdbg.is_enlarged_buf)
 		return _disp_log_stats(g_qsee_log, &log_start,
 			QSEE_LOG_BUF_SIZE - sizeof(struct tzdbg_log_pos_t),
@@ -1272,9 +1276,12 @@ static ssize_t tzdbg_fs_read_unencrypted(int tz_id, char __user *buf,
 
 	if (tz_id == TZDBG_BOOT || tz_id == TZDBG_RESET ||
 		tz_id == TZDBG_INTERRUPT || tz_id == TZDBG_GENERAL ||
-		tz_id == TZDBG_VMID || tz_id == TZDBG_LOG)
-		memcpy_fromio((void *)tzdbg.diag_buf, tzdbg.virt_iobase,
-						debug_rw_buf_size);
+		tz_id == TZDBG_VMID || tz_id == TZDBG_LOG) {
+		if (!tzdbg.is_tz_qsee_log_enabled)
+			return 0;
+
+		memcpy_fromio((void *)tzdbg.diag_buf, tzdbg.virt_iobase, debug_rw_buf_size);
+	}
 
 	if (tz_id == TZDBG_HYP_GENERAL || tz_id == TZDBG_HYP_LOG)
 		memcpy_fromio((void *)tzdbg.hyp_diag_buf,
@@ -1475,6 +1482,9 @@ static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 	}
 	pr_debug("qseelog buf size is 0x%x\n", qseelog_buf_size);
 
+	if (!tzdbg.is_tz_qsee_log_enabled)
+		return 0;
+
 	buf = dma_alloc_coherent(&pdev->dev,
 			qseelog_buf_size, &coh_pmem, GFP_KERNEL);
 	if (buf == NULL)
@@ -1499,9 +1509,7 @@ static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 
 	ret = qcom_scm_register_qsee_log_buf(coh_pmem, qseelog_buf_size);
 	if (ret != QSEOS_RESULT_SUCCESS) {
-		pr_err(
-		"%s: scm_call to register log buf failed, resp result =%d\n",
-		__func__, ret);
+		pr_err("scm_call to register log buf failed, resp result =%d\n", ret);
 		goto exit_dereg_bridge;
 	}
 
@@ -1783,10 +1791,40 @@ static void tzdbg_query_encrypted_log(void)
 		else
 			pr_err("scm_call QUERY_ENCR_LOG_FEATURE failed ret %d\n", ret);
 		tzdbg.is_encrypted_log_enabled = false;
-	} else {
-		pr_warn("encrypted qseelog enabled is %llu\n", enabled);
+	} else
 		tzdbg.is_encrypted_log_enabled = enabled;
+}
+
+static void tzdbg_query_log_status(void)
+{
+	int ret = 0;
+	u64 status = 0;
+
+	ret = qcom_scm_query_log_status(&status);
+	if (ret) {
+		if (ret == -EIO) {
+			pr_warn("query_log_status NOT supported in QTEE, fallback to query_encryption call\n");
+			/* As fallback mechanism, check for log encryption query scm call */
+			tzdbg_query_encrypted_log();
+			tzdbg.is_tz_qsee_log_enabled = true;
+		} else
+			pr_err("qcom_scm_query_log_status scm failed, ret %d\n", ret);
+	} else {
+		/* status:
+		 * Bit 0: encryption status
+		 * Bit 1: tz/qsee logging status
+		 *
+		 * If encryption enabled, tz/qsee logging is assumed to be enabled
+		 * If encryption disabled, Check Bit 1 to see logging enabled or not.
+		 */
+		if (status & 1) {
+			tzdbg.is_encrypted_log_enabled = true;
+			tzdbg.is_tz_qsee_log_enabled = true;
+		} else if ((status >> 1) & 1)
+			tzdbg.is_tz_qsee_log_enabled = true;
 	}
+	pr_info("status: 0x%llx, encrypted log enabled: %d, is_tz_qsee_log_enabled: %d\n",
+		status, tzdbg.is_encrypted_log_enabled, tzdbg.is_tz_qsee_log_enabled);
 }
 
 /*
@@ -1872,11 +1910,12 @@ static int tz_log_probe(struct platform_device *pdev)
 	 */
 	tzdiag_phy_iobase = readl_relaxed(virt_iobase);
 
-	tzdbg_query_encrypted_log();
+	tzdbg_query_log_status();
+
 	/*
-	 * Map the diagnostic information area if encryption is disabled
+	 * Map the diagnostic information area if encryption is disabled and logging is enabled
 	 */
-	if (!tzdbg.is_encrypted_log_enabled) {
+	if (tzdbg.is_tz_qsee_log_enabled && !tzdbg.is_encrypted_log_enabled) {
 		tzdbg.virt_iobase = devm_ioremap(&pdev->dev,
 				tzdiag_phy_iobase, debug_rw_buf_size);
 

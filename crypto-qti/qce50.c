@@ -214,6 +214,7 @@ struct qce_device {
 	bool offload_pipes_support;
 	bool no_clock_gating;
 	bool reset_with_recovery_req;
+	uint32_t bam_phy_reg_mask;
 };
 
 static void print_notify_debug(struct sps_event_notify *notify);
@@ -382,7 +383,8 @@ void qce_get_crypto_status(void *handle, struct qce_error *error)
 
 	memset(error, 0, sizeof(*error));
 	if (status[0] != QCE_NO_ERROR_VAL1 && status[0] != QCE_NO_ERROR_VAL2) {
-		if (pce_dev->ce_bam_info.minor_version >= 8) {
+		if (pce_dev->ce_bam_info.minor_version >= 8 ||
+			pce_dev->ce_bam_info.major_version > 5) {
 			qce_get_error_v8(pce_dev, error, status);
 		} else {
 			if ((status[2] & CRYPTO5_LEGACY_TIMER_EXPIRED_STATUS3) ||
@@ -434,8 +436,9 @@ static void qce_enable_clock_gating(struct qce_device *pce_dev)
 		pr_info("Clock gating is either not supported or disabled.\n");
 		return;
 	}
-	if (pce_dev->ce_bam_info.major_version == 5 &&
-		pce_dev->ce_bam_info.minor_version >= 9) {
+	if ((pce_dev->ce_bam_info.major_version == 5 &&
+		pce_dev->ce_bam_info.minor_version >= 9) ||
+			pce_dev->ce_bam_info.major_version > 5) {
 		writel(CRYPTO_AUTO_SHUTDOWN_EN,	pce_dev->iobase + CRYPTO_PWR_CTRL);
 	}
 	return;
@@ -560,11 +563,14 @@ static int _probe_ce_engine(struct qce_device *pce_dev)
 	maj_rev = (rev & CRYPTO_CORE_MAJOR_REV_MASK) >> CRYPTO_CORE_MAJOR_REV;
 	min_rev = (rev & CRYPTO_CORE_MINOR_REV_MASK) >> CRYPTO_CORE_MINOR_REV;
 	step_rev = (rev & CRYPTO_CORE_STEP_REV_MASK) >> CRYPTO_CORE_STEP_REV;
-
-	if (maj_rev != CRYPTO_CORE_MAJOR_VER_NUM) {
+	if (maj_rev < CRYPTO_CORE_MAJOR_VER_NUM) {
 		pr_err("Unsupported QTI crypto device at 0x%x, rev %d.%d.%d\n",
 			pce_dev->phy_iobase, maj_rev, min_rev, step_rev);
 		return -EIO;
+	} else if (maj_rev > CRYPTO_CORE_MAJOR_VER_NUM) {
+		pce_dev->bam_phy_reg_mask = 0x3FFFF;
+	} else {
+		pce_dev->bam_phy_reg_mask = 0xFFFFFFFF;
 	}
 
 	/*
@@ -577,8 +583,8 @@ static int _probe_ce_engine(struct qce_device *pce_dev)
 	 * fixed. no_ccm_mac_status_get_around flag indicates this.
 	 */
 	pce_dev->no_get_around = (min_rev >=
-			CRYPTO_CORE_MINOR_VER_NUM) ? true : false;
-	if (min_rev > CRYPTO_CORE_MINOR_VER_NUM)
+			CRYPTO_CORE_MINOR_VER_NUM || maj_rev > 5) ? true : false;
+	if (min_rev > CRYPTO_CORE_MINOR_VER_NUM || maj_rev > 5)
 		pce_dev->no_ccm_mac_status_get_around = true;
 	else if ((min_rev == CRYPTO_CORE_MINOR_VER_NUM) &&
 			 (step_rev >= CRYPTO_CORE_STEP_VER_NUM))
@@ -675,15 +681,15 @@ static int _ce_setup_hash(struct qce_device *pce_dev,
 			(sreq->alg == QCE_HASH_SHA256_HMAC) ||
 			(sreq->alg ==  QCE_HASH_AES_CMAC)) {
 		pce = cmdlistinfo->go_proc;
-		pce->addr = (uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase);
+		pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
 		use_pipe_key = (sreq->flags & QCRYPTO_CTX_USE_PIPE_KEY) ==
 						QCRYPTO_CTX_USE_PIPE_KEY;
 		if ((sreq->flags & QCRYPTO_CTX_USE_HW_KEY)
 						== QCRYPTO_CTX_USE_HW_KEY) {
 			use_hw_key = true;
 			use_pipe_key = false;
-			pce->addr = (uint32_t)(CRYPTO_GOPROC_QC_KEY_REG +
-							pce_dev->phy_iobase);
+			pce->addr = ((uint32_t)(CRYPTO_GOPROC_QC_KEY_REG +
+							pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
 		} else {
 			pce = cmdlistinfo->auth_key;
 			if (!use_pipe_key) {
@@ -1081,14 +1087,15 @@ static int _ce_setup_cipher(struct qce_device *pce_dev, struct qce_req *creq,
 	}
 
 	pce = cmdlistinfo->go_proc;
-	pce->addr = (uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase);
+
+	pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
 	use_pipe_key = (creq->flags & QCRYPTO_CTX_USE_PIPE_KEY) ==
 					QCRYPTO_CTX_USE_PIPE_KEY;
 	if ((creq->flags & QCRYPTO_CTX_USE_HW_KEY) == QCRYPTO_CTX_USE_HW_KEY) {
 		use_hw_key = true;
 		use_pipe_key = false;
-		pce->addr = (uint32_t)(CRYPTO_GOPROC_QC_KEY_REG +
-						pce_dev->phy_iobase);
+		pce->addr = ((uint32_t)(CRYPTO_GOPROC_QC_KEY_REG +
+						pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
 	}
 
 	if (!use_pipe_key && !use_hw_key) {
@@ -1447,7 +1454,7 @@ static int _ce_f9_setup(struct qce_device *pce_dev, struct qce_f9_req *req,
 
 	/* write go */
 	pce = cmdlistinfo->go_proc;
-	pce->addr = (uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase);
+	pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
 	return 0;
 }
 
@@ -1521,7 +1528,7 @@ static int _ce_f8_setup(struct qce_device *pce_dev, struct qce_f8_req *req,
 
 	/* write go */
 	pce = cmdlistinfo->go_proc;
-	pce->addr = (uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase);
+	pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
 
 	return 0;
 }
@@ -2035,7 +2042,8 @@ static int _ablk_cipher_complete(struct qce_device *pce_dev, int req_info)
 		qce_callback(areq, NULL, NULL, pce_sps_data->consumer_status |
 								result_status);
 	} else {
-		if (pce_dev->ce_bam_info.minor_version == 0) {
+		if (pce_dev->ce_bam_info.minor_version == 0 &&
+			pce_dev->ce_bam_info.major_version <= 5) {
 			if (preq_info->mode == QCE_MODE_CBC) {
 				if  (preq_info->dir == QCE_DECRYPT)
 					memcpy(iv, (char *)preq_info->dec_iv,
@@ -2200,7 +2208,8 @@ static int _qce_sps_add_sg_data(struct qce_device *pce_dev,
 		len = min(nbytes, sg_dma_len(sg_src));
 		nbytes -= len;
 		addr = sg_dma_address(sg_src);
-		if (pce_dev->ce_bam_info.minor_version == 0)
+		if (pce_dev->ce_bam_info.minor_version == 0 &&
+			pce_dev->ce_bam_info.major_version <= 5)
 			len = ALIGN(len, pce_dev->ce_bam_info.ce_burst_size);
 		while (len > 0) {
 			if (sps_bam_pipe->iovec_count == QCE_MAX_NUM_DSCR) {
@@ -2264,7 +2273,8 @@ static int _qce_sps_add_sg_data_off(struct qce_device *pce_dev,
 		len = min(nbytes, res_within_sg);
 		nbytes -= len;
 		addr = sg_dma_address(sg_src) + off;
-		if (pce_dev->ce_bam_info.minor_version == 0)
+		if (pce_dev->ce_bam_info.minor_version == 0 &&
+			pce_dev->ce_bam_info.major_version <= 5)
 			len = ALIGN(len, pce_dev->ce_bam_info.ce_burst_size);
 		while (len > 0) {
 			if (sps_bam_pipe->iovec_count == QCE_MAX_NUM_DSCR) {
@@ -2967,7 +2977,9 @@ static void qce_add_cmd_element(struct qce_device *pdev,
 			struct sps_command_element **cmd_ptr, u32 addr,
 			u32 data, struct sps_command_element **populate)
 {
-	(*cmd_ptr)->addr = (uint32_t)(addr + pdev->phy_iobase);
+
+	(*cmd_ptr)->addr = ((uint32_t)(addr + pdev->phy_iobase)) & pdev->bam_phy_reg_mask;
+
 	(*cmd_ptr)->command = 0;
 	(*cmd_ptr)->data = data;
 	(*cmd_ptr)->mask = 0xFFFFFFFF;
@@ -4552,7 +4564,8 @@ static int _qce_aead_ccm_req(void *handle, struct qce_req *q_req)
 	 * The destination scatter list is pointing to the same
 	 * data area as source.
 	 */
-	if (pce_dev->ce_bam_info.minor_version == 0)
+	if (pce_dev->ce_bam_info.minor_version == 0 &&
+		pce_dev->ce_bam_info.major_version <= 5)
 		preq_info->src_nents = count_sg(areq->src, totallen_in);
 	else
 		preq_info->src_nents = count_sg(areq->src, areq->cryptlen +
@@ -4630,7 +4643,8 @@ static int _qce_aead_ccm_req(void *handle, struct qce_req *q_req)
 			goto bad;
 	}
 
-	if (pce_dev->ce_bam_info.minor_version == 0) {
+	if (pce_dev->ce_bam_info.minor_version == 0 &&
+		pce_dev->ce_bam_info.major_version <= 5) {
 		goto bad;
 	} else {
 		if (q_req->assoclen) {
@@ -4904,7 +4918,8 @@ int qce_aead_req(void *handle, struct qce_req *q_req)
 
 	preq_info->mode = q_req->mode;
 
-	if (pce_dev->ce_bam_info.minor_version == 0) {
+	if (pce_dev->ce_bam_info.minor_version == 0 &&
+		pce_dev->ce_bam_info.major_version <= 5) {
 		rc = _qce_sps_add_sg_data(pce_dev, areq->src, totallen,
 					&pce_sps_data->in_transfer);
 		if (rc)
@@ -5031,7 +5046,8 @@ int qce_ablk_cipher_req(void *handle, struct qce_req *c_req)
 		preq_info->dst_nents = preq_info->src_nents;
 	}
 	preq_info->dir = c_req->dir;
-	if  ((pce_dev->ce_bam_info.minor_version == 0) &&
+	if  ((pce_dev->ce_bam_info.minor_version == 0 &&
+		pce_dev->ce_bam_info.major_version <= 5) &&
 			(preq_info->dir == QCE_DECRYPT) &&
 			(c_req->mode == QCE_MODE_CBC)) {
 		memcpy(preq_info->dec_iv, (unsigned char *)
@@ -6206,7 +6222,8 @@ int qce_hw_support(void *handle, struct ce_hw_support *ce_support)
 	ce_support->aes_ccm = true;
 	ce_support->clk_mgmt_sus_res = pce_dev->support_clk_mgmt_sus_res;
 	ce_support->req_bw_before_clk = pce_dev->request_bw_before_clk;
-	if (pce_dev->ce_bam_info.minor_version)
+	if ((pce_dev->ce_bam_info.minor_version && pce_dev->ce_bam_info.major_version == 5) ||
+		pce_dev->ce_bam_info.major_version > 5)
 		ce_support->aligned_only = false;
 	else
 		ce_support->aligned_only = true;
