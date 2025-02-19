@@ -72,9 +72,11 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
     deps = select({
         "//build/kernel/kleaf:socrepo_true": [
             "//soc-repo:all_headers",
+            "//soc-repo:{}/drivers/soc/qcom/mem_buf/mem_buf".format(kernel_build_variant),
             "//soc-repo:{}/drivers/soc/qcom/mem_buf/mem_buf_dev".format(kernel_build_variant),
             "//soc-repo:{}/drivers/firmware/qcom/qcom-scm".format(kernel_build_variant),
             "//soc-repo:{}/drivers/firmware/qcom/si_core/si_core_module".format(kernel_build_variant),
+            "//soc-repo:{}/drivers/iommu/qcom_iommu_util".format(kernel_build_variant),
             "//soc-repo:{}/drivers/firmware/qcom/si_core/mem_object".format(kernel_build_variant),
             "//soc-repo:{}/drivers/virt/gunyah/gh_msgq".format(kernel_build_variant),
             "//soc-repo:{}/drivers/dma-buf/heaps/qcom_dma_heaps".format(kernel_build_variant),

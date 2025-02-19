@@ -204,6 +204,7 @@ struct ce_bam_info {
 	int				ce_burst_size;
 	uint32_t			minor_version;
 	uint32_t			major_version;
+	uint32_t			step_version;
 	struct qce_sps_ep_conn_data	producer[QCE_PIPE_LAST];
 	struct qce_sps_ep_conn_data	consumer[QCE_PIPE_LAST];
 };
@@ -249,6 +250,8 @@ struct ce_request_info {
 	enum qce_offload_op_enum offload_op;
 	enum qce_pipe_enum  pipe_index;
 	u32 key_index;
+	bool results_dump_enabled;
+	bool smmu_mapped_by_request;
 };
 
 struct qce_driver_stats {

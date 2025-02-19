@@ -499,7 +499,7 @@ static int start_cipher_req(struct qcedev_control *podev,
 	creq.enckey =  &qcedev_areq->cipher_op_req.enckey[0];
 	creq.encklen = qcedev_areq->cipher_op_req.encklen;
 
-	creq.cryptlen = qcedev_areq->cipher_op_req.data_len;
+	creq.cryptlen = qcedev_areq->cipher_req.creq.cryptlen;
 
 	if (qcedev_areq->cipher_op_req.encklen == 0) {
 		if ((qcedev_areq->cipher_op_req.op == QCEDEV_OPER_ENC_NO_KEY)
@@ -644,7 +644,7 @@ static int start_offload_cipher_req(struct qcedev_control *podev,
 	if (qcedev_areq->offload_cipher_op_req.is_copy_op)
 		creq.is_copy_op = true;
 
-	creq.cryptlen = qcedev_areq->offload_cipher_op_req.data_len;
+	creq.cryptlen = qcedev_areq->cipher_req.creq.cryptlen;
 
 	creq.qce_cb = qcedev_offload_cipher_req_cb;
 	creq.areq = (void *)&qcedev_areq->cipher_req;
@@ -665,6 +665,7 @@ static int start_offload_cipher_req(struct qcedev_control *podev,
 				     << 12;
 	}
 	creq.block_offset = qcedev_areq->offload_cipher_op_req.byte_offset;
+	creq.is_smmu_mapped = true; /* Offload requests are pre-mapped. */
 	ret = qce_ablk_cipher_req(podev->qce, &creq);
 
 	*current_req_info = creq.current_req_info;
@@ -2104,6 +2105,15 @@ error:
 	return -EINVAL;
 }
 
+/* Valid algorithms for OFFLOAD only */
+static int is_valid_alg_mode(enum qcedev_cipher_alg_enum alg,
+			     enum qcedev_cipher_mode_enum mode)
+{
+	return ((alg == QCEDEV_ALG_AES && mode == QCEDEV_AES_MODE_CBC) ||
+		(alg == QCEDEV_ALG_AES && mode == QCEDEV_AES_MODE_ECB) ||
+		(alg == QCEDEV_ALG_AES && mode == QCEDEV_AES_MODE_CTR));
+}
+
 static int
 qcedev_check_extended_cipher_params(struct qcedev_extended_cipher_req *req,
 				    struct qcedev_control *podev)
@@ -2117,10 +2127,9 @@ qcedev_check_extended_cipher_params(struct qcedev_extended_cipher_req *req,
 		goto error;
 	}
 
-	if ((req->alg != QCEDEV_ALG_AES) ||
-		(req->mode > QCEDEV_AES_MODE_CTR)) {
-		pr_err("%s: Invalid algorithm %d\n", __func__,
-					(uint32_t)req->alg);
+	if (!is_valid_alg_mode(req->alg, req->mode)) {
+		pr_err("%s: Invalid algorithm %d, and mode %d pair\n", __func__,
+		       (uint32_t)req->alg, (uint32_t)req->mode);
 		goto error;
 	}
 

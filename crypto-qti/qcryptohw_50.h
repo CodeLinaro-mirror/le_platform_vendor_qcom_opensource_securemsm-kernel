@@ -543,6 +543,7 @@
 #define CRYPTO_GO				0
 #define CRYPTO_CLR_CNTXT			1
 #define CRYPTO_RESULTS_DUMP			2
+#define CRYPTO_RESULTS_DUMP_USE_OUT_SID		3
 
 /* pwr_ctrl reg */
 #define CRYPTO_AUTO_SHUTDOWN_EN 1

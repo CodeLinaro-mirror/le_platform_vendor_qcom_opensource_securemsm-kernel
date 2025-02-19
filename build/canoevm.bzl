@@ -11,6 +11,7 @@ def define_canoevm():
             "CONFIG_QCOM_SMCINVOKE",
             "CONFIG_QTI_SMMU_PROXY",
             "CONFIG_QCOM_SI_CORE",
+            "CONFIG_ARCH_QTI_VM",
         ],
      )
     define_vm_modules(
@@ -23,5 +24,6 @@ def define_canoevm():
             "CONFIG_QCOM_SMCINVOKE",
             "CONFIG_QTI_SMMU_PROXY",
             "CONFIG_QCOM_SI_CORE",
+            "CONFIG_ARCH_QTI_VM",
         ],
      )

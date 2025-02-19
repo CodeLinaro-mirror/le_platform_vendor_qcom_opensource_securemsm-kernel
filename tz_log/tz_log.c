@@ -1795,6 +1795,7 @@ static void tzdbg_query_encrypted_log(void)
 		tzdbg.is_encrypted_log_enabled = enabled;
 }
 
+#if (KERNEL_VERSION(6, 12, 0) <= LINUX_VERSION_CODE)
 static void tzdbg_query_log_status(void)
 {
 	int ret = 0;
@@ -1823,9 +1824,9 @@ static void tzdbg_query_log_status(void)
 		} else if ((status >> 1) & 1)
 			tzdbg.is_tz_qsee_log_enabled = true;
 	}
-	pr_info("status: 0x%llx, encrypted log enabled: %d, is_tz_qsee_log_enabled: %d\n",
-		status, tzdbg.is_encrypted_log_enabled, tzdbg.is_tz_qsee_log_enabled);
+	pr_info("status: 0x%llx\n", status);
 }
+#endif
 
 /*
  * Driver functions
@@ -1910,8 +1911,14 @@ static int tz_log_probe(struct platform_device *pdev)
 	 */
 	tzdiag_phy_iobase = readl_relaxed(virt_iobase);
 
+#if (KERNEL_VERSION(6, 12, 0) <= LINUX_VERSION_CODE)
 	tzdbg_query_log_status();
-
+#else
+	tzdbg_query_encrypted_log();
+	tzdbg.is_tz_qsee_log_enabled = true;
+#endif
+	pr_info("encrypted log enabled: %d, is_tz_qsee_log_enabled: %d\n",
+		tzdbg.is_encrypted_log_enabled, tzdbg.is_tz_qsee_log_enabled);
 	/*
 	 * Map the diagnostic information area if encryption is disabled and logging is enabled
 	 */

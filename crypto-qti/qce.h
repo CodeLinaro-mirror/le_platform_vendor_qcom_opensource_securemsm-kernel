@@ -207,6 +207,7 @@ struct qce_req {
 	unsigned int block_offset;	/* partial first block for AES CTR */
 	bool is_copy_op;		/* copy buffers without crypto ops */
 	int current_req_info;
+	bool is_smmu_mapped;	/* flag for if IO data is SMMU mapped already. */
 };
 
 struct qce_pm_table {

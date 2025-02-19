@@ -182,7 +182,18 @@ register_securemsm_module(
 register_securemsm_module(
     name = "smmu_proxy_dlkm",
     path = SMMU_PROXY_PATH,
-    srcs = ["qti-smmu-proxy-pvm.c", "qti-smmu-proxy-common.c"],
+    config_srcs = {
+        "CONFIG_ARCH_QTI_VM": {
+            True: [
+                "qti-smmu-proxy-tvm.c",
+                "qti-smmu-proxy-common.c",
+            ],
+            False: [
+                "qti-smmu-proxy-pvm.c",
+                "qti-smmu-proxy-common.c",
+            ],
+        }
+    },
     deps = ["%b_smcinvoke_dlkm", ":smmu_proxy_headers"],
 )
 
