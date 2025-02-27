@@ -4,7 +4,8 @@
  */
 
 #include <linux/kthread.h>
-
+#include <linux/platform_device.h>
+#include <linux/pm_wakeup.h>
 #include <linux/qcom-iommu-util.h>
 #include <dt-bindings/arm/msm/qti-smmu-proxy-dt-ids.h>
 #include "qti-smmu-proxy-common.h"
@@ -39,10 +40,16 @@ struct cb_dev {
 
 struct task_struct *receiver_msgq_handler_thread;
 
+static char smmu_ws_name[] = "smmu_virt_ws";
+static struct wakeup_source *smmu_ws = NULL;
+
+
 static int zero_dma_buf(struct dma_buf *dmabuf)
 {
-	int ret;
+	int ret = -EINVAL;
 	struct iosys_map vmap_struct = {0};
+
+        __pm_stay_awake(smmu_ws);
 
 	ret = dma_buf_vmap(dmabuf, &vmap_struct);
 	if (ret) {
@@ -452,13 +459,13 @@ static void smmu_proxy_process_msg(void *buf, size_t size)
 	}
 
 	if (!ret)
-		return;
+		goto pm_release;
 
 handle_err:
 	resp = kzalloc(sizeof(resp), GFP_KERNEL);
 	if (!resp) {
 		pr_err("%s: Failed to allocate memory for response\n", __func__);
-		return;
+		goto pm_release;
 	}
 
 	resp->msg_type = SMMU_PROXY_ERR_RESP;
@@ -472,14 +479,22 @@ handle_err:
 		pr_debug("%s: response to mapping request sent\n", __func__);
 
 	kfree(resp);
-
+pm_release:
+    __pm_relax(smmu_ws);
+    return;
 }
 
 static int receiver_msgq_handler(void *msgq_hdl)
 {
 	void *buf;
 	size_t size;
-	int ret;
+	int ret = 0;
+
+	smmu_ws = wakeup_source_register(NULL, smmu_ws_name);
+        if(!smmu_ws) {
+           pr_err("%s: Wakeup source creation failed\n", __func__);
+           return -1;
+        }
 
 	buf = kzalloc(GH_MSGQ_MAX_MSG_SIZE_BYTES, GFP_KERNEL);
 	if (!buf)
@@ -773,6 +788,7 @@ static int cb_probe_handler(struct device *dev)
 #else
 	ret = dma_coerce_mask_and_coherent(dev, DMA_BIT_MASK(64));
 #endif
+
 	if (ret) {
 		dev_err(dev, "Failed to set DMA-MASK\n");
 		return ret;
