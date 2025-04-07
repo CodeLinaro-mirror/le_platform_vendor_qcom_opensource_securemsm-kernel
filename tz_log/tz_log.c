@@ -438,7 +438,7 @@ struct tzdbg {
 	bool is_hyplog_enabled;
 	uint32_t tz_version;
 	bool is_encrypted_log_enabled;
-	bool is_tz_qsee_log_enabled;
+	bool tz_qsee_plain_log_enabled;
 	bool is_enlarged_buf;
 	bool is_full_encrypted_tz_logs_supported;
 	bool is_full_encrypted_tz_logs_enabled;
@@ -1165,9 +1165,10 @@ static int _disp_qsee_log_stats(size_t count)
 	static struct tzdbg_log_pos_t log_start = {0};
 	static struct tzdbg_log_pos_v2_t log_start_v2 = {0};
 
-	if (!tzdbg.is_tz_qsee_log_enabled)
+	if (!tzdbg.tz_qsee_plain_log_enabled)
 		return 0;
 
+	pr_debug("Display unencrypted qsee logs!\n");
 	if (!tzdbg.is_enlarged_buf)
 		return _disp_log_stats(g_qsee_log, &log_start,
 			QSEE_LOG_BUF_SIZE - sizeof(struct tzdbg_log_pos_t),
@@ -1277,9 +1278,10 @@ static ssize_t tzdbg_fs_read_unencrypted(int tz_id, char __user *buf,
 	if (tz_id == TZDBG_BOOT || tz_id == TZDBG_RESET ||
 		tz_id == TZDBG_INTERRUPT || tz_id == TZDBG_GENERAL ||
 		tz_id == TZDBG_VMID || tz_id == TZDBG_LOG) {
-		if (!tzdbg.is_tz_qsee_log_enabled)
+		if (!tzdbg.tz_qsee_plain_log_enabled)
 			return 0;
 
+		pr_debug("TZ diag region is directly accessible, copy data now.\n");
 		memcpy_fromio((void *)tzdbg.diag_buf, tzdbg.virt_iobase, debug_rw_buf_size);
 	}
 
@@ -1461,7 +1463,7 @@ static int tzdbg_init_tme_log(struct platform_device *pdev, void __iomem *virt_i
 }
 
 /*
- * Allocates log buffer from ION, registers the buffer at TZ
+ * Allocates log buffer in HLOS and register with QTEE.
  */
 static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 {
@@ -1481,9 +1483,6 @@ static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 		qseelog_buf_size = QSEE_LOG_BUF_SIZE;
 	}
 	pr_debug("qseelog buf size is 0x%x\n", qseelog_buf_size);
-
-	if (!tzdbg.is_tz_qsee_log_enabled)
-		return 0;
 
 	buf = dma_alloc_coherent(&pdev->dev,
 			qseelog_buf_size, &coh_pmem, GFP_KERNEL);
@@ -1507,6 +1506,7 @@ static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 	g_qsee_log_v2 = (struct tzdbg_log_v2_t *)buf;
 	g_qsee_log_v2->log_pos.wrap = g_qsee_log_v2->log_pos.offset = 0;
 
+	/* Always register qsee log buffer */
 	ret = qcom_scm_register_qsee_log_buf(coh_pmem, qseelog_buf_size);
 	if (ret != QSEOS_RESULT_SUCCESS) {
 		pr_err("scm_call to register log buf failed, resp result =%d\n", ret);
@@ -1542,6 +1542,7 @@ static int tzdbg_allocate_encrypted_log_buf(struct platform_device *pdev)
 	if (!tzdbg.is_encrypted_log_enabled)
 		return 0;
 
+	pr_debug("Register tz/qsee encrypted logs buffer\n");
 	/* max encrypted qsee log buf zize (include header, and page align) */
 	enc_qseelog_info.size = qseelog_buf_size + PAGE_SIZE;
 
@@ -1807,23 +1808,28 @@ static void tzdbg_query_log_status(void)
 			pr_warn("query_log_status NOT supported in QTEE, fallback to query_encryption call\n");
 			/* As fallback mechanism, check for log encryption query scm call */
 			tzdbg_query_encrypted_log();
-			tzdbg.is_tz_qsee_log_enabled = true;
+			tzdbg.tz_qsee_plain_log_enabled = true;
 		} else
 			pr_err("qcom_scm_query_log_status scm failed, ret %d\n", ret);
-	} else {
-		/* status:
-		 * Bit 0: encryption status
-		 * Bit 1: tz/qsee logging status
-		 *
-		 * If encryption enabled, tz/qsee logging is assumed to be enabled
-		 * If encryption disabled, Check Bit 1 to see logging enabled or not.
-		 */
-		if (status & 1) {
-			tzdbg.is_encrypted_log_enabled = true;
-			tzdbg.is_tz_qsee_log_enabled = true;
-		} else if ((status >> 1) & 1)
-			tzdbg.is_tz_qsee_log_enabled = true;
+		return;
 	}
+
+	/* status:
+	 * Bit 0: encryption status
+	 * Bit 1: tz/qsee plain text logging status
+	 * --------------------------------------------------------------------
+	 * |Bit 0|Bit 1| Comments                                             |
+	 * --------------------------------------------------------------------
+	 * |  1  |  0  | Possible combn, no direct access to tz/qsee buffer   |
+	 * |  0  |  0  | Possible combn, no direct access to tz/qsee buffer.  |
+	 * |  1  |  1  | Combn not possible                                   |
+	 * |  0  |  1  | Possible combn, tz/qsee direct buffer access allowed |
+	 * --------------------------------------------------------------------
+	 *
+	 */
+	tzdbg.is_encrypted_log_enabled = status & 1;
+	tzdbg.tz_qsee_plain_log_enabled = (status >> 1) & 1;
+
 	pr_info("status: 0x%llx\n", status);
 }
 #endif
@@ -1850,9 +1856,7 @@ static int tz_log_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	/*
-	 * Get address that stores the physical location diagnostic data
-	 */
+	/* Get address that stores the physical location diagnostic data */
 	resource = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!resource) {
 		dev_err(&pdev->dev,
@@ -1860,14 +1864,10 @@ static int tz_log_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
-	/*
-	 * Get the debug buffer size
-	 */
+	/* Get the debug buffer size */
 	debug_rw_buf_size = resource_size(resource);
 
-	/*
-	 * Map address that stores the physical location diagnostic data
-	 */
+	/* Map address that stores the physical location diagnostic data */
 	virt_iobase = devm_ioremap(&pdev->dev, resource->start,
 				debug_rw_buf_size);
 	if (!virt_iobase) {
@@ -1906,23 +1906,27 @@ static int tz_log_probe(struct platform_device *pdev)
 		dev_dbg(&pdev->dev, "Device tree data is not found\n");
 	}
 
-	/*
-	 * Retrieve the address of diagnostic data
-	 */
+	/* Retrieve the address of diagnostic data */
 	tzdiag_phy_iobase = readl_relaxed(virt_iobase);
 
 #if (KERNEL_VERSION(6, 12, 0) <= LINUX_VERSION_CODE)
 	tzdbg_query_log_status();
 #else
 	tzdbg_query_encrypted_log();
-	tzdbg.is_tz_qsee_log_enabled = true;
+	tzdbg.tz_qsee_plain_log_enabled = true;
 #endif
-	pr_info("encrypted log enabled: %d, is_tz_qsee_log_enabled: %d\n",
-		tzdbg.is_encrypted_log_enabled, tzdbg.is_tz_qsee_log_enabled);
+	pr_info("is_encrypted_log_enabled: %d, tz_qsee_plain_log_enabled: %d\n",
+		tzdbg.is_encrypted_log_enabled, tzdbg.tz_qsee_plain_log_enabled);
+
 	/*
-	 * Map the diagnostic information area if encryption is disabled and logging is enabled
+	 * TZ diag region is directly accessible if plain text logging is
+	 * enabled.
+	 *
+	 * Map region only in this case otherwise skip it. The data mapped here
+	 * will be displayed via tzdbg_fs_read_unencrypted func.
 	 */
-	if (tzdbg.is_tz_qsee_log_enabled && !tzdbg.is_encrypted_log_enabled) {
+	if (tzdbg.tz_qsee_plain_log_enabled) {
+		pr_debug("Create buffer for tz logs direct access\n");
 		tzdbg.virt_iobase = devm_ioremap(&pdev->dev,
 				tzdiag_phy_iobase, debug_rw_buf_size);
 
@@ -1938,7 +1942,9 @@ static int tz_log_probe(struct platform_device *pdev)
 		if (ptr == NULL)
 			return -ENOMEM;
 		tzdbg.diag_buf = (struct tzdbg_t *)ptr;
-	} else {
+	}
+
+	if (tzdbg.is_encrypted_log_enabled) {
 		if ((tzdbg.tz_diag_major_version == TZBSP_DIAG_MAJOR_VERSION_V9) &&
 			(tzdbg.tz_diag_minor_version >= TZBSP_DIAG_MINOR_VERSION_V22))
 			tzdbg.is_full_encrypted_tz_logs_supported = true;
@@ -1955,12 +1961,18 @@ static int tz_log_probe(struct platform_device *pdev)
 		pr_warn("Tme log initialization failed!\n");
 	}
 
-	/* register unencrypted qsee log buffer */
+	/*
+	 * QTEE expects HLOS to always register a buffer so that it can log
+	 * data to it. QTEE doesn't own any internal buffer for qsee logs.
+	 *
+	 * The buffer should be registered even if later, HLOS isn't allowed to
+	 * access contents directly.
+	 */
 	ret = tzdbg_register_qsee_log_buf(pdev);
 	if (ret)
 		goto exit_free_diag_buf;
 
-	/* allocate encrypted qsee and tz log buffer */
+	/* Allocate encrypted qsee and tz log buffer if encryption is enabled */
 	ret = tzdbg_allocate_encrypted_log_buf(pdev);
 	if (ret) {
 		dev_err(&pdev->dev,
@@ -1994,7 +2006,7 @@ exit_free_encr_log_buf:
 exit_free_qsee_log_buf:
 	tzdbg_free_qsee_log_buf(pdev);
 exit_free_diag_buf:
-	if (!tzdbg.is_encrypted_log_enabled)
+	if (tzdbg.tz_qsee_plain_log_enabled)
 		kfree(tzdbg.diag_buf);
 	return -ENXIO;
 }
