@@ -3,7 +3,7 @@
  * QTI CE device driver.
  *
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/mman.h>
@@ -33,6 +33,7 @@
 #include "qce.h"
 #include "qcedev_smmu.h"
 #include "qcom_crypto_device.h"
+#include <linux/compat.h>
 #if IS_ENABLED(CONFIG_COMPAT)
 #include "compat_qcedev.h"
 #endif
@@ -557,6 +558,8 @@ void qcedev_offload_cipher_req_cb(void *cookie, unsigned char *icv,
 	if (!areq || !areq->cookie)
 		return;
 	handle = (struct qcedev_handle *) areq->cookie;
+	if (!handle || !handle->cntl)
+		return;
 	podev = handle->cntl;
 	if (!podev)
 		return;
