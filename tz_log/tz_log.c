@@ -32,8 +32,6 @@
 #include <linux/tmelog.h>
 #endif
 
-#include "misc/qseecomi.h"
-
 /* QSEE_LOG_BUF_SIZE = 32K */
 #define QSEE_LOG_BUF_SIZE 0x8000
 
@@ -1508,7 +1506,7 @@ static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 
 	/* Always register qsee log buffer */
 	ret = qcom_scm_register_qsee_log_buf(coh_pmem, qseelog_buf_size);
-	if (ret != QSEOS_RESULT_SUCCESS) {
+	if (ret) {
 		pr_err("scm_call to register log buf failed, resp result =%d\n", ret);
 		goto exit_dereg_bridge;
 	}

@@ -1,22 +1,23 @@
 load(":securemsm_kernel.bzl", "define_consolidate_gki_modules")
 
-def define_pineapple():
+def define_lahaina():
     define_consolidate_gki_modules(
-        target = "pineapple",
+        target = "lahaina",
         modules = [
             "smcinvoke_dlkm",
             "tz_log_dlkm",
+            "qseecom_dlkm",
             "hdcp_qseecom_dlkm",
             "qce50_dlkm",
             "qcedev-mod_dlkm",
             "qrng_dlkm",
             "qcrypto-msm_dlkm",
             "smmu_proxy_dlkm",
-            "qseecom_dlkm",
-            "tmecom-intf_dlkm",
-        ],
-        extra_options = [
-            "CONFIG_QCOM_SMCINVOKE",
-            "CONFIG_QSEECOM_COMPAT",
-        ],
-    )
+         ],
+         extra_options = [
+             "CONFIG_QCOM_SI_CORE_TEST",
+             "CONFIG_QCOM_SMCINVOKE",
+             "CONFIG_QSEECOM_COMPAT",
+             "CONFIG_QCOM_SI_CORE",
+         ],
+     )

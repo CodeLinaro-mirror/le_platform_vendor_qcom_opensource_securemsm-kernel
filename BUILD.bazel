@@ -7,6 +7,16 @@ package(
 load("//build/kernel/kleaf:kernel.bzl", "ddk_headers")
 
 ddk_headers(
+    name = "tmecom_kernel_headers",
+    hdrs = [
+        "include/linux/tmelog.h",
+    ],
+    includes = [
+        "include",
+    ],
+)
+
+ddk_headers(
     name = "smcinvoke_kernel_headers",
     hdrs = glob([
         "include/linux/smcinvoke*.h",
@@ -91,6 +101,8 @@ load(":build/pitti.bzl", "define_pitti")
 load(":build/parrot.bzl", "define_parrot")
 load(":build/canoe.bzl", "define_canoe")
 load(":build/autoghgvm.bzl", "define_autoghgvm")
+load(":build/lahaina.bzl", "define_lahaina")
+load(":build/vienna.bzl", "define_vienna")
 
 define_pineapple()
 define_blair()
@@ -103,3 +115,5 @@ define_pitti()
 define_parrot()
 define_canoe()
 define_autoghgvm()
+define_lahaina()
+define_vienna()

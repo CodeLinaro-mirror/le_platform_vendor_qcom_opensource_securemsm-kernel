@@ -4,7 +4,7 @@
  * QTI Crypto Engine driver.
  *
  * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt) "QCE50: %s: " fmt, __func__
@@ -257,7 +257,7 @@ static void qce_choose_pipe_from_op(struct qce_device *pce_dev, int req_info)
 {
 	struct ce_request_info *preq_info = &pce_dev->ce_request_info[req_info];
 
-	if (pce_dev->key_index_mode_enabled) {
+	if (pce_dev->key_index_mode_enabled && preq_info->use_drm_key_sids) {
 		preq_info->pipe_index = QCE_PIPE_KERNEL_KERNEL;
 	} else {
 		switch (preq_info->offload_op) {
@@ -296,6 +296,26 @@ static bool is_secure_input_op(enum qce_offload_op_enum op)
 static bool is_secure_output_op(int op)
 {
 	return (op == QCE_OFFLOAD_HLOS_CPB || op == QCE_OFFLOAD_HLOS_CPB_1);
+}
+
+static inline bool should_use_out_sid_bit(struct ce_request_info *preq_info,
+					  bool use_pipe_key)
+{
+	/*
+	 * The USE_OUT_SID bit doesn't actually use out SID, it just switches
+	 * the default SID to the opposite SID. The default SID is based on
+	 * USE_PIPE_KEY as shown below.
+	 */
+	if (use_pipe_key) {
+		/* Default is input SID. If it's secure we need to switch. */
+		if (is_secure_input_op(preq_info->offload_op))
+			return true;
+	} else {
+		/* Default is output SID. If it's secure we need to switch. */
+		if (is_secure_output_op(preq_info->offload_op))
+			return true;
+	}
+	return false;
 }
 
 /**
@@ -1430,8 +1450,8 @@ static int _ce_setup_cipher(struct qce_device *pce_dev, struct qce_req *creq,
 	pce->data = ((1 << CRYPTO_GO) | (1 << CRYPTO_CLR_CNTXT));
 	if (preq_info->results_dump_enabled) {
 		pce->data |= (1 << CRYPTO_RESULTS_DUMP);
-		if (is_secure_input_op(preq_info->offload_op) &&
-		    pce_dev->results_dump_input_support)
+		if (pce_dev->results_dump_input_support &&
+		    should_use_out_sid_bit(preq_info, use_pipe_key))
 			pce->data |= (1 << CRYPTO_RESULTS_DUMP_USE_OUT_SID);
 	}
 
@@ -4925,6 +4945,7 @@ int qce_aead_req(void *handle, struct qce_req *q_req)
 
 	totallen = q_req->cryptlen + areq->assoclen;
 	preq_info->offload_op = QCE_OFFLOAD_NONE;
+	preq_info->use_drm_key_sids = false;
 	qce_choose_pipe_from_op(pce_dev, req_info);
 	qce_choose_key_index(pce_dev, req_info, q_req->key_index);
 
@@ -5104,6 +5125,8 @@ int qce_ablk_cipher_req(void *handle, struct qce_req *c_req)
 	pce_sps_data = &preq_info->ce_sps;
 
 	preq_info->offload_op = c_req->offload_op;
+	preq_info->use_drm_key_sids =
+		(c_req->flags == QCRYPTO_CTX_USE_PIPE_KEY);
 	qce_choose_pipe_from_op(pce_dev, req_info);
 	qce_choose_key_index(pce_dev, req_info, c_req->key_index);
 
@@ -5273,6 +5296,7 @@ int qce_process_sha_req(void *handle, struct qce_sha_req *sreq)
 	preq_info = &pce_dev->ce_request_info[req_info];
 	pce_sps_data = &preq_info->ce_sps;
 	preq_info->offload_op = QCE_OFFLOAD_NONE;
+	preq_info->use_drm_key_sids = false;
 	qce_choose_pipe_from_op(pce_dev, req_info);
 	qce_choose_key_index(pce_dev, req_info, sreq->key_index);
 
@@ -5380,6 +5404,7 @@ int qce_f8_req(void *handle, struct qce_f8_req *req,
 	preq_info = &pce_dev->ce_request_info[req_info];
 	pce_sps_data = &preq_info->ce_sps;
 	preq_info->offload_op = QCE_OFFLOAD_NONE;
+	preq_info->use_drm_key_sids = false;
 	qce_choose_pipe_from_op(pce_dev, req_info);
 	qce_choose_key_index(pce_dev, req_info, 0);
 
@@ -5520,6 +5545,7 @@ int qce_f8_multi_pkt_req(void *handle, struct qce_f8_multi_pkt_req *mreq,
 	preq_info = &pce_dev->ce_request_info[req_info];
 	pce_sps_data = &preq_info->ce_sps;
 	preq_info->offload_op = QCE_OFFLOAD_NONE;
+	preq_info->use_drm_key_sids = false;
 	qce_choose_pipe_from_op(pce_dev, req_info);
 	qce_choose_key_index(pce_dev, req_info, 0);
 
@@ -5654,6 +5680,7 @@ int qce_f9_req(void *handle, struct qce_f9_req *req, void *cookie,
 	}
 
 	preq_info->offload_op = QCE_OFFLOAD_NONE;
+	preq_info->use_drm_key_sids = false;
 	qce_choose_pipe_from_op(pce_dev, req_info);
 	qce_choose_key_index(pce_dev, req_info, 0);
 	preq_info->phy_ota_src = dma_map_single(pce_dev->pdev, req->message,

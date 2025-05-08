@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #define pr_fmt(fmt) "smcinvoke: %s: " fmt, __func__
@@ -32,6 +32,9 @@
 
 #define SMCI_DEVICE_NAME "smcinvoke"
 #define SMCI_CLASS "smcinvoke-class"
+
+#define CREATE_TRACE_POINTS
+#include "trace_smci.h"
 
 static DEFINE_MUTEX(si_mutex);
 
@@ -929,6 +932,7 @@ static int wait_for_pending_txn(struct server_info *si, struct cb_txn **cb_txn)
 	remove_wait_queue(&si->Q, &wait);
 	*cb_txn = t;
 
+	trace_wait_for_pending_txn(si->comm, t, ret);
 	return ret;
 }
 
@@ -1019,6 +1023,7 @@ static int cbo_dispatch(unsigned int context_id,
 	if (IS_ERR(cb_txn))
 		return PTR_ERR(cb_txn);
 
+	trace_cbo_dispatch_handle(si_object_name(object), context_id, cb_object->u_handle, op);
 	/* 'context_id' is unique. Let's use it fot transaction ID. */
 
 	cb_txn->context_id = context_id;
@@ -1056,6 +1061,7 @@ static int cbo_dispatch(unsigned int context_id,
 		return 0;
 	}
 
+	trace_cbo_dispatch_wait(si_object_name(object),	context_id, cb_txn->completion.done);
 	/* Wait in FREEZABLE state in case we should suspend, here. */
 	wait_for_completion_state(&cb_txn->completion, TASK_KILLABLE | TASK_FREEZABLE);
 
@@ -1072,6 +1078,7 @@ static int cbo_dispatch(unsigned int context_id,
 	else
 		dequeue_and_put_txn(cb_txn);
 
+	trace_cbo_dispatch_ret(si_object_name(object), context_id, errno);
 	return errno;
 }
 
@@ -1150,7 +1157,7 @@ static void mem_object_release(void *private)
 	struct cb_object *cb_x = private;
 
 	if (cb_x) {
-
+		trace_mem_object_release(cb_x->si->comm, cb_x->u_handle);
 		/* Note 'cb_x->object' has not been isinialized. Do not use it! */
 		pr_debug("dma_buf released i.e. cbo-%s%lld\n", cb_x->si->comm, cb_x->u_handle);
 
@@ -1180,6 +1187,8 @@ static long process_accept_req(struct server_info *si, struct smcinvoke_accept *
 
 	if (accept->argsize != sizeof(union smcinvoke_arg))
 		return -EINVAL;
+
+	trace_process_accept_req_handle(accept->txn_id, accept->has_resp);
 
 	/* Processing response ... */
 	if (accept->has_resp) {
@@ -1261,6 +1270,8 @@ static long process_accept_req(struct server_info *si, struct smcinvoke_accept *
 	/* Processing request ... */
 wait_on_request:
 
+	trace_process_accept_req_wait(si->comm, accept->txn_id, accept->has_resp, accept->result);
+
 	do {
 		if (wait_for_pending_txn(si, &cb_txn)) {
 			pr_debug("%s received a signal.\n", si->comm);
@@ -1312,6 +1323,8 @@ out_failed:
 
 	put_txn(cb_txn);
 
+	trace_process_accept_req_ret(si->comm, accept->cbobj_id, accept->txn_id, accept->op,
+		accept->counts, accept->result);
 	return 0;
 }
 
@@ -1474,6 +1487,8 @@ static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned lon
 	if (!oic)
 		return -ENOMEM;
 
+	trace_process_invoke_req_handle(cmd, u_req.op, u_req.counts);
+
 	u_args_nr = OBJECT_COUNTS_TOTAL(u_req.counts);
 	u_args = kcalloc(u_args_nr, u_req.argsize, GFP_KERNEL);
 	if (!u_args) {
@@ -1522,6 +1537,9 @@ static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned lon
 
 	/* TODO. Move this initialization to SI-CORE. */
 	u_req.result = OBJECT_ERROR_INVALID;
+
+	trace_process_invoke_req_wait(si_object_name(object), typeof_si_object(object), u_req.op,
+		u_req.counts);
 
 	ret = si_object_do_invoke(oic, object, u_req.op, u, &u_req.result);
 	if (ret) {
@@ -1590,7 +1608,8 @@ static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned lon
 	ret = 0;
 
 out_failed:
-
+	trace_process_invoke_req_ret(si_object_name(object), oic->context_id, u_req.op,
+		u_req.counts, u_req.result, ret);
 	kfree(u);
 	kfree(u_args);
 	kfree(oic);

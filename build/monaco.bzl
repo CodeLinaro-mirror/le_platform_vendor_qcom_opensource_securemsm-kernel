@@ -11,7 +11,8 @@ def define_monaco():
             "qcedev-mod_dlkm",
             "qrng_dlkm",
             "qcrypto-msm_dlkm",
-            "qseecom_dlkm"
+            "qseecom_dlkm",
+            "tmecom-intf_dlkm",
         ],
         extra_options = [
             "CONFIG_QCOM_SMCINVOKE",

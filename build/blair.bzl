@@ -12,7 +12,8 @@ def define_blair():
             "qrng_dlkm",
             "qcrypto-msm_dlkm",
             "smmu_proxy_dlkm",
-            "qseecom_dlkm"
+            "qseecom_dlkm",
+            "tmecom-intf_dlkm",
         ],
         extra_options = [
             "CONFIG_QCOM_SMCINVOKE",

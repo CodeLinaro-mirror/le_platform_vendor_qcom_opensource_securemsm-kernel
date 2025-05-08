@@ -3,7 +3,7 @@
  * QTI CE device driver.
  *
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/mman.h>
@@ -628,15 +628,21 @@ static int start_offload_cipher_req(struct qcedev_control *podev,
 	switch (qcedev_areq->offload_cipher_op_req.key.key_type) {
 	case QCEDEV_KEY_TYPE_LEGACY_PIPE_KEY:
 		creq.key_index = QCE_KEY_INDEX_INVALID;
+		creq.flags = QCEDEV_CTX_USE_PIPE_KEY;
+		creq.op = QCE_REQ_ABLK_CIPHER_NO_KEY;
 		break;
 	case QCEDEV_KEY_TYPE_GP_KEY_INDEX:
 	case QCEDEV_KEY_TYPE_DRM_KEY_INDEX:
 		creq.key_index =
 			qcedev_areq->offload_cipher_op_req.key.key_index;
+		creq.flags = QCEDEV_CTX_USE_PIPE_KEY;
+		creq.op = QCE_REQ_ABLK_CIPHER_NO_KEY;
 		break;
 	case QCEDEV_KEY_TYPE_SOFTWARE_KEY:
 		creq.enckey =
 			qcedev_areq->offload_cipher_op_req.key.software_key;
+		creq.flags = 0;
+		creq.op = QCE_REQ_ABLK_CIPHER;
 		break;
 	default:
 		pr_err("%s: Unknown key type enum: %d\n", __func__,
@@ -645,9 +651,6 @@ static int start_offload_cipher_req(struct qcedev_control *podev,
 	}
 	creq.encklen = qcedev_areq->offload_cipher_op_req.key.key_length;
 
-	/* OFFLOAD use cases use PIPE keys so no need to set keys */
-	creq.flags = QCEDEV_CTX_USE_PIPE_KEY;
-	creq.op = QCE_REQ_ABLK_CIPHER_NO_KEY;
 	creq.offload_op = (int)qcedev_areq->offload_cipher_op_req.op;
 	if (qcedev_areq->offload_cipher_op_req.is_copy_op)
 		creq.is_copy_op = true;

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2013-2020, The Linux Foundation. All rights reserved.
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef _DRIVERS_CRYPTO_MSM_QCE50_H_
@@ -250,6 +250,7 @@ struct ce_request_info {
 	enum qce_offload_op_enum offload_op;
 	enum qce_pipe_enum  pipe_index;
 	u32 key_index;
+	bool use_drm_key_sids;
 	bool results_dump_enabled;
 	bool smmu_mapped_by_request;
 };
