@@ -9,6 +9,7 @@
 
 #include "qce.h"
 #include "linux/msm-sps.h"
+#include "qce.h"
 
 /* MAX Data xfer block size between BAM and CE */
 #define MAX_CE_BAM_BURST_SIZE   0x40
@@ -191,7 +192,7 @@ struct qce_ce_cfg_reg_setting {
 };
 
 struct ce_bam_info {
-	uint32_t			bam_irq;
+	int				bam_irq;
 	uint32_t			bam_mem;
 	void __iomem			*bam_iobase;
 	uint32_t			ce_device;
@@ -233,6 +234,7 @@ struct ce_request_info {
 	enum qce_xfer_type_enum	xfer_type;
 	struct ce_sps_data ce_sps;
 	qce_comp_func_ptr_t qce_cb;	/* qce callback function pointer */
+	qce_error_func_ptr_t qce_err_cb;
 	void *user;
 	void *areq;
 	int assoc_nents;

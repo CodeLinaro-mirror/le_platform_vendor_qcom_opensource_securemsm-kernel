@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include "qti-smmu-proxy-common.h"
@@ -10,7 +10,7 @@
 #include <linux/qcom-dma-mapping.h>
 #include <linux/of.h>
 #include <linux/delay.h>
-#include <linux/pm_wakeup.h>
+#include <linux/version.h>
 #define DELAY_MS 30
 #define GH_MSGQ_RECV_RETRY_CNT 10
 
@@ -472,5 +472,10 @@ int __init init_smmu_proxy_driver(void)
 }
 module_init(init_smmu_proxy_driver);
 
+#if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
+MODULE_IMPORT_NS("DMA_BUF");
+#else
 MODULE_IMPORT_NS(DMA_BUF);
+#endif
+
 MODULE_LICENSE("GPL v2");

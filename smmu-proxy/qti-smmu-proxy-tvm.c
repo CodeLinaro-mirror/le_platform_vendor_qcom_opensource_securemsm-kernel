@@ -9,6 +9,7 @@
 #include <linux/qcom-iommu-util.h>
 #include <dt-bindings/arm/msm/qti-smmu-proxy-dt-ids.h>
 #include "qti-smmu-proxy-common.h"
+#include <linux/version.h>
 
 #define RECEIVER_COMPAT_STR "smmu-proxy-receiver"
 #define CB_COMPAT_STR "smmu-proxy-cb"
@@ -853,5 +854,10 @@ int __init init_smmu_proxy_driver(void)
 }
 module_init(init_smmu_proxy_driver);
 
+#if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
+MODULE_IMPORT_NS("DMA_BUF");
+#else
 MODULE_IMPORT_NS(DMA_BUF);
+#endif
+
 MODULE_LICENSE("GPL v2");

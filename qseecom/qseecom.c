@@ -3359,6 +3359,7 @@ static int qseecom_prepare_unload_app(struct qseecom_dev_handle *data)
 				data->client.attach, data->client.dmabuf);
 		}
 		data->released = true;
+		__qseecom_free_tzbuf(&data->sglistinfo_shm);
 		return 0;
 	}
 
@@ -10116,7 +10117,12 @@ static void qseecom_exit(void)
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("QTI Secure Execution Environment Communicator");
+
+#if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
+MODULE_IMPORT_NS("DMA_BUF");
+#else
 MODULE_IMPORT_NS(DMA_BUF);
+#endif
 
 module_init(qseecom_init);
 module_exit(qseecom_exit);

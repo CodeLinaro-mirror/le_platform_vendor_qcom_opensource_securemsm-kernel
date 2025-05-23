@@ -23,6 +23,14 @@ ifeq ($(ENABLE_SECUREMSM_DLKM), true)
   ifeq ($(TARGET_BOARD_PLATFORM), canoe)
     ENABLE_TMECOM_INTF_DLKM := true
   endif #canoe
+  #enable QCEDEV_FE driver only on Automotive Lemans HQX LA GVM.
+  ifeq ($(ENABLE_HYP),true)
+    ifeq ($(TARGET_BOARD_PLATFORM),gen4)
+      ifneq ($(TARGET_USES_GY), true)
+        ENABLE_QCEDEV_FE := true
+      endif #TARGET_USES_GY
+    endif #TARGET_BOARD_PLATFORM
+  endif #ENABLE_HYP
 endif #ENABLE_SECUREMSM_DLKM
 
 ifeq ($(ENABLE_SECUREMSM_QTEE_DLKM), true)
@@ -44,14 +52,6 @@ ifeq ($(TARGET_USES_GY), true)
   ENABLE_QSEECOM_DLKM := false
 endif #TARGET_USES_GY
 
-#enable QCEDEV_FE driver only on Automotive Lemans HQX LA GVM.
-ifeq ($(ENABLE_HYP),true)
-  ifeq ($(TARGET_BOARD_PLATFORM),gen4)
-    ifneq ($(TARGET_USES_GY), true)
-      ENABLE_QCEDEV_FE := true
-    endif #TARGET_USES_GY
-  endif #TARGET_BOARD_PLATFORM
-endif #ENABLE_HYP
 
 LOCAL_PATH := $(call my-dir)
 

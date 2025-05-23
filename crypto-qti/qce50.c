@@ -27,6 +27,7 @@
 #include <crypto/sha1.h>
 #include <soc/qcom/socinfo.h>
 #include <linux/iommu.h>
+#include <linux/interrupt.h>
 
 #include "qcrypto.h"
 #include "qce.h"
@@ -149,7 +150,6 @@ struct recovery_request {
 	struct skcipher_with_handle areq;
 };
 
-
 /*
  * CE HW device structure.
  * Each engine has an instance of the structure.
@@ -168,6 +168,7 @@ struct qce_device {
 	uint32_t bam_mem;		/* bam physical address, from DT */
 	uint32_t bam_mem_size;		/* bam io size, from DT */
 	int is_shared;			/* CE HW is shared */
+	int core_irq;			/* CE Core interrupt number*/
 	bool support_cmd_dscr;
 	bool support_hw_key;
 	bool support_clk_mgmt_sus_res;
@@ -218,6 +219,9 @@ struct qce_device {
 	bool reset_with_recovery_req;
 	uint32_t bam_phy_reg_mask;
 	bool results_dump_input_support;
+	bool support_core_irq;
+	struct tasklet_struct core_irq_bottom_half;
+	bool fifo_eco_unavailable;
 };
 
 static void print_notify_debug(struct sps_event_notify *notify);
@@ -243,13 +247,6 @@ static bool is_crypto_600(struct qce_device *pce_dev)
 	return ((pce_dev->ce_bam_info.major_version == 6) &&
 			(pce_dev->ce_bam_info.minor_version == 0) &&
 			(pce_dev->ce_bam_info.step_version == 0));
-}
-
-static bool is_crypto_601(struct qce_device *pce_dev)
-{
-	return ((pce_dev->ce_bam_info.major_version == 6) &&
-			(pce_dev->ce_bam_info.minor_version == 0) &&
-			(pce_dev->ce_bam_info.step_version == 1));
 }
 
 /* Select a pipe from an operation type in-place for the req_info. */
@@ -365,8 +362,12 @@ static uint32_t qce_get_config_be(struct qce_device *pce_dev,
 				   uint32_t pipe_pair)
 {
 	uint32_t beats = (pce_dev->ce_bam_info.ce_burst_size >> 3) - 1;
+	uint32_t irq_mask = 0;
 
-	return (beats << CRYPTO_REQ_SIZE |
+	if (pce_dev->support_core_irq)
+		irq_mask = CRYPTO_IRQ_ENABLES_MASK;
+
+	return (beats << CRYPTO_REQ_SIZE | irq_mask |
 		BIT(CRYPTO_MASK_DOUT_INTR) | BIT(CRYPTO_MASK_DIN_INTR) |
 		BIT(CRYPTO_MASK_OP_DONE_INTR) | 0 << CRYPTO_HIGH_SPD_EN_N |
 		pipe_pair << CRYPTO_PIPE_SET_SELECT);
@@ -1738,6 +1739,14 @@ int qce_set_irqs(void *handle, bool enable)
 }
 EXPORT_SYMBOL(qce_set_irqs);
 
+bool qce_supports_core_irqs(void *handle)
+{
+	struct qce_device *pce_dev = handle;
+
+	return pce_dev->support_core_irq;
+}
+EXPORT_SYMBOL_GPL(qce_supports_core_irqs);
+
 static inline void qce_free_req_info(struct qce_device *pce_dev, int req_info,
 		bool is_complete);
 
@@ -1806,14 +1815,21 @@ int qce_manage_timeout(void *handle, int req_info)
 	struct qce_device *pce_dev = (struct qce_device *) handle;
 	struct skcipher_request *areq;
 	struct ce_request_info *preq_info;
-	qce_comp_func_ptr_t qce_callback;
-	uint16_t pipe_index = pce_dev->ce_request_info[req_info].pipe_index;
+	bool recovery_req_needed = false;
+	uint16_t pipe_index;
 	struct qce_error error = {0};
 	int retries = 0;
 
+	if (!pce_dev) {
+		pr_err("Handle is NULL.\n");
+		return -ENXIO;
+	}
+
+	pipe_index =  pce_dev->ce_request_info[req_info].pipe_index;
 	preq_info = &pce_dev->ce_request_info[req_info];
-	qce_callback = preq_info->qce_cb;
 	areq = (struct skcipher_request *) preq_info->areq;
+	recovery_req_needed = pce_dev->reset_with_recovery_req &&
+			      preq_info->use_drm_key_sids;
 
 	pr_info("%s: req info = %d, pipe_index = %d\n", __func__, req_info, pipe_index);
 
@@ -1840,7 +1856,7 @@ int qce_manage_timeout(void *handle, int req_info)
 	}
 	qce_free_req_info(pce_dev, req_info, true);
 
-	if (pce_dev->reset_with_recovery_req) {
+	if (recovery_req_needed) {
 		unsigned long wait = 0;
 
 		reinit_completion(&pce_dev->recovery_req.complete);
@@ -1851,8 +1867,13 @@ int qce_manage_timeout(void *handle, int req_info)
 			wait = wait_for_completion_timeout(
 					&pce_dev->recovery_req.complete,
 					msecs_to_jiffies(50));
-		if (wait == 0)
+		if (wait == 0) {
 			pr_err("Could not complete a recovery request.\n");
+			qce_free_req_info(
+				pce_dev,
+				pce_dev->recovery_req.creq.current_req_info,
+				true);
+		}
 	}
 
 	qce_get_crypto_status(pce_dev, &error);
@@ -2431,6 +2452,7 @@ static int _qce_sps_transfer(struct qce_device *pce_dev, int req_info)
 	struct ce_sps_data *pce_sps_data;
 	uint16_t pipe_index = pce_dev->ce_request_info[req_info].pipe_index;
 
+	pce_dev->ce_request_info[req_info].in_prog = true;
 	pce_sps_data = &pce_dev->ce_request_info[req_info].ce_sps;
 	pce_sps_data->out_transfer.user =
 		(void *)((uintptr_t)(CRYPTO_REQ_USER_PAT |
@@ -2456,6 +2478,8 @@ static int _qce_sps_transfer(struct qce_device *pce_dev, int req_info)
 		pr_err("sps_xfr() fail (producer pipe=0x%lx) rc = %d\n",
 			(uintptr_t)pce_dev->ce_bam_info.producer[pipe_index].pipe, rc);
 ret:
+	if	(rc)
+		pce_dev->ce_request_info[req_info].in_prog = false;
 	return rc;
 }
 
@@ -2557,11 +2581,16 @@ static int qce_sps_init_ep_conn(struct qce_device *pce_dev,
 	 */
 	sps_connect_info->desc.size = QCE_MAX_NUM_DSCR * MAX_QCE_ALLOC_BAM_REQ *
 					sizeof(struct sps_iovec);
-	if ((sps_connect_info->desc.size > MAX_SPS_DESC_FIFO_SIZE) ||
-		 is_crypto_600(pce_dev))
+	if (sps_connect_info->desc.size > MAX_SPS_DESC_FIFO_SIZE)
 		sps_connect_info->desc.size = MAX_SPS_DESC_FIFO_SIZE;
-	if (is_crypto_601(pce_dev))
-		sps_connect_info->desc.size = SPS_DESC_FIFO_SIZE_4K;
+
+	if (is_crypto_600(pce_dev)) {
+		if (pce_dev->fifo_eco_unavailable)
+			sps_connect_info->desc.size = MAX_SPS_DESC_FIFO_SIZE;
+		else
+			sps_connect_info->desc.size = SPS_DESC_FIFO_SIZE_4K;
+	}
+
 	sps_connect_info->desc.base = dma_alloc_coherent(pce_dev->pdev,
 					sps_connect_info->desc.size,
 					&sps_connect_info->desc.phys_base,
@@ -3010,6 +3039,12 @@ static void _sps_producer_callback(struct sps_event_notify *notify)
 	}
 	op = pce_dev->ce_request_info[req_info].offload_op;
 	pipe_index = pce_dev->ce_request_info[req_info].pipe_index;
+
+	if (!pce_dev->ce_request_info[req_info].in_prog) {
+		pr_err("request information %d was not expecting callback\n", req_info);
+		return;
+	}
+	pce_dev->ce_request_info[req_info].in_prog = false;
 
 	pce_sps_data = &preq_info->ce_sps;
 	if ((preq_info->xfer_type == QCE_XFER_CIPHERING ||
@@ -4312,6 +4347,121 @@ static int qce_setup_ce_sps_data(struct qce_device *pce_dev)
 	return 0;
 }
 
+static void qce_core_dout_rdy_irq(struct qce_device *pce_dev,
+					 unsigned int *status)
+{
+	panic("QCE CORE IRQ for DOUT_RDY is unimplemented.\n");
+}
+static void qce_core_din_rdy_irq(struct qce_device *pce_dev,
+					unsigned int *status)
+{
+	panic("QCE CORE IRQ for DIN_RDY is unimplemented.\n");
+}
+static void qce_core_op_done_irq(struct qce_device *pce_dev,
+					unsigned int *status)
+{
+	panic("QCE CORE IRQ for OP_DONE is unimplemented.\n");
+}
+static void qce_core_error_intr_irq(struct qce_device *pce_dev,
+				    unsigned int *status)
+{
+	pr_err("A GPCE Core error occurred, closing active requests.\n");
+	struct ce_request_info *ce_req_info = NULL;
+	struct qce_error qce_err;
+	int req_info;
+
+	qce_get_crypto_status(pce_dev, &qce_err);
+
+	for (req_info = 0; req_info < MAX_QCE_BAM_REQ; req_info++) {
+		ce_req_info = &pce_dev->ce_request_info[req_info];
+		if (atomic_read(&ce_req_info->in_use)) {
+			if (!ce_req_info->in_prog)
+				continue;
+			ce_req_info->in_prog = false;
+			pr_err("Shutting down request: %d\n", req_info);
+			if (ce_req_info->qce_err_cb) {
+				ce_req_info->qce_err_cb(ce_req_info->areq,
+							&qce_err);
+			} else {
+				panic("No error callback for req_info: %d.\n",
+				      req_info);
+			}
+		}
+	}
+}
+
+static void qce_core_irq_bottom_half(unsigned long data)
+{
+	struct qce_device *pce_dev = (struct qce_device *)data;
+	unsigned int status[6];
+
+	status[0] = readl_relaxed(pce_dev->iobase + CRYPTO_STATUS_REG);
+	status[1] = readl_relaxed(pce_dev->iobase + CRYPTO_STATUS2_REG);
+	status[2] = readl_relaxed(pce_dev->iobase + CRYPTO_STATUS3_REG);
+	status[3] = readl_relaxed(pce_dev->iobase + CRYPTO_STATUS4_REG);
+	status[4] = readl_relaxed(pce_dev->iobase + CRYPTO_STATUS5_REG);
+	status[5] = readl_relaxed(pce_dev->iobase + CRYPTO_STATUS6_REG);
+
+	if ((status[0] & BIT(CRYPTO_DOUT_INTR)) == BIT(CRYPTO_DOUT_INTR)) {
+		qce_core_dout_rdy_irq(pce_dev, status);
+		status[0] ^= BIT(CRYPTO_DOUT_INTR);
+	}
+	if ((status[0] & BIT(CRYPTO_DIN_INTR)) == BIT(CRYPTO_DIN_INTR)) {
+		qce_core_din_rdy_irq(pce_dev, status);
+		status[0] ^= BIT(CRYPTO_DIN_INTR);
+	}
+	if ((status[0] & BIT(CRYPTO_OP_DONE_INTR)) ==
+	    BIT(CRYPTO_OP_DONE_INTR)) {
+		qce_core_op_done_irq(pce_dev, status);
+		status[0] ^= BIT(CRYPTO_OP_DONE_INTR);
+	}
+	if ((status[0] & BIT(CRYPTO_ERR_INTR)) == BIT(CRYPTO_ERR_INTR)) {
+		qce_core_error_intr_irq(pce_dev, status);
+		status[0] ^= BIT(CRYPTO_ERR_INTR);
+	}
+
+	writel_relaxed(status[0], pce_dev->iobase + CRYPTO_STATUS_REG);
+	writel_relaxed(status[1], pce_dev->iobase + CRYPTO_STATUS2_REG);
+	writel_relaxed(status[2], pce_dev->iobase + CRYPTO_STATUS3_REG);
+	writel_relaxed(status[3], pce_dev->iobase + CRYPTO_STATUS4_REG);
+	writel_relaxed(status[4], pce_dev->iobase + CRYPTO_STATUS5_REG);
+	writel_relaxed(status[5], pce_dev->iobase + CRYPTO_STATUS6_REG);
+}
+
+/* Handles interrupts from the crypto core, i.e. not BAM/SPS. */
+static irqreturn_t qce_core_irq_handler(int irq, void *data)
+{
+	struct qce_device *pce_dev = (struct qce_device *)data;
+
+	tasklet_schedule(&pce_dev->core_irq_bottom_half);
+	return IRQ_HANDLED;
+}
+
+/* Setup core interrupts */
+static int qce_core_irq_init(struct qce_device *pce_dev)
+{
+	int ret = 0;
+
+	if (!pce_dev->support_core_irq)
+		return ret;
+
+	ret = request_irq(pce_dev->core_irq, qce_core_irq_handler,
+			  IRQF_TRIGGER_RISING, "qcedev", pce_dev);
+	if (ret) {
+		pr_err("Could not request irq: %d\n", ret);
+		return ret;
+	}
+	enable_irq(pce_dev->core_irq);
+	return ret;
+}
+
+static int qce_core_irq_remove(struct qce_device *pce_dev)
+{
+	if (pce_dev->support_core_irq)
+		free_irq(pce_dev->core_irq, pce_dev);
+	return 0;
+}
+
 static int qce_init_ce_cfg_val(struct qce_device *pce_dev)
 {
 	uint32_t pipe_pair =
@@ -4726,6 +4876,7 @@ static int _qce_aead_ccm_req(void *handle, struct qce_req *q_req)
 	/* setup for callback, and issue command to bam */
 	preq_info->areq = q_req->areq;
 	preq_info->qce_cb = q_req->qce_cb;
+	preq_info->qce_err_cb = NULL;
 	preq_info->dir = q_req->dir;
 
 	/* setup xfer type for producer callback handling */
@@ -4994,6 +5145,7 @@ int qce_aead_req(void *handle, struct qce_req *q_req)
 	/* setup for callback, and issue command to bam */
 	preq_info->areq = q_req->areq;
 	preq_info->qce_cb = q_req->qce_cb;
+	preq_info->qce_err_cb = NULL;
 	preq_info->dir = q_req->dir;
 	preq_info->asg = NULL;
 
@@ -5186,6 +5338,7 @@ int qce_ablk_cipher_req(void *handle, struct qce_req *c_req)
 	/* setup for client callback, and issue command to BAM */
 	preq_info->areq = areq;
 	preq_info->qce_cb = c_req->qce_cb;
+	preq_info->qce_err_cb = c_req->qce_err_cb;
 
 	/* setup xfer type for producer callback handling */
 	preq_info->xfer_type = QCE_XFER_CIPHERING;
@@ -5320,6 +5473,7 @@ int qce_process_sha_req(void *handle, struct qce_sha_req *sreq)
 
 	preq_info->areq = areq;
 	preq_info->qce_cb = sreq->qce_cb;
+	preq_info->qce_err_cb = NULL;
 
 	/* setup xfer type for producer callback handling */
 	preq_info->xfer_type = QCE_XFER_HASHING;
@@ -5461,6 +5615,7 @@ int qce_f8_req(void *handle, struct qce_f8_req *req,
 	/* setup for callback, and issue command to sps */
 	preq_info->areq = cookie;
 	preq_info->qce_cb = qce_cb;
+	preq_info->qce_err_cb = NULL;
 
 	/* setup xfer type for producer callback handling */
 	preq_info->xfer_type = QCE_XFER_F8;
@@ -5595,6 +5750,7 @@ int qce_f8_multi_pkt_req(void *handle, struct qce_f8_multi_pkt_req *mreq,
 	/* setup for callback, and issue command to sps */
 	preq_info->areq = cookie;
 	preq_info->qce_cb = qce_cb;
+	preq_info->qce_err_cb = NULL;
 
 	/* setup xfer type for producer callback handling */
 	preq_info->xfer_type = QCE_XFER_F8;
@@ -5698,6 +5854,7 @@ int qce_f9_req(void *handle, struct qce_f9_req *req, void *cookie,
 	/* setup for callback, and issue command to sps */
 	preq_info->areq = cookie;
 	preq_info->qce_cb = qce_cb;
+	preq_info->qce_err_cb = NULL;
 
 	/* setup xfer type for producer callback handling */
 	preq_info->xfer_type = QCE_XFER_F9;
@@ -5907,10 +6064,20 @@ static int __qce_get_device_tree_data(struct platform_device *pdev,
 		goto err_getting_bam_info;
 	}
 
-	pce_dev->ce_bam_info.bam_irq = platform_get_irq(pdev,0);
+	pce_dev->ce_bam_info.bam_irq = platform_get_irq_byname(pdev, "bam-irq");
 	if (pce_dev->ce_bam_info.bam_irq < 0) {
-		pr_err("CRYPTO BAM IRQ unavailable.\n");
-		goto err_dev;
+		pce_dev->ce_bam_info.bam_irq = platform_get_irq(pdev, 0);
+		if (pce_dev->ce_bam_info.bam_irq < 0) {
+			pr_err("CRYPTO BAM IRQ unavailable.\n");
+			rc = -EINVAL;
+			goto err_dev;
+		}
+	}
+	pce_dev->core_irq = platform_get_irq_byname(pdev, "core-irq");
+	pce_dev->support_core_irq = true;
+	if (pce_dev->core_irq < 0) {
+		pr_err("CRYPTO CORE IRQ unavailable.\n");
+		pce_dev->support_core_irq = false;
 	}
 	return rc;
 err_dev:
@@ -6155,6 +6322,7 @@ static int setup_recovery_req(struct qce_device *pce_dev)
 	rreq->creq.cryptlen = len;
 	rreq->creq.key_index = QCE_RECOVERY_REQ_KEY_INDEX;
 	rreq->creq.qce_cb = qce_recovery_complete;
+	rreq->creq.qce_err_cb = NULL;
 
 	rreq->creq.is_pattern_valid = false;
 	rreq->creq.block_offset = 0;
@@ -6175,6 +6343,32 @@ static int qce_smmu_init(struct qce_device *pce_dev)
 	dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
 	dma_set_seg_boundary(dev, (unsigned long)DMA_BIT_MASK(64));
 	return 0;
+}
+
+#define TCSR_SOC_HW_VERSION	0x1FC8000
+#define REG_SIZE	4
+#define TCSR_SOC_HW_VERSION_MAJOR_MASK	GENMASK(15, 8)
+
+static void qce_parse_soc_revision(struct qce_device *pce_dev)
+{
+	unsigned int soc_hw_version = 0;
+	unsigned int major = 0;
+	void __iomem *hw_version_reg = ioremap(TCSR_SOC_HW_VERSION, REG_SIZE);
+
+	if (!hw_version_reg) {
+		pr_err("reg remap failed for TCSR\n");
+		pce_dev->fifo_eco_unavailable = false;
+		return;
+	}
+	soc_hw_version = readl(hw_version_reg);
+	major = FIELD_GET(TCSR_SOC_HW_VERSION_MAJOR_MASK, soc_hw_version);
+
+	if (major == 1)
+		pce_dev->fifo_eco_unavailable = true;
+	else
+		pce_dev->fifo_eco_unavailable = false;
+
+	iounmap(hw_version_reg);
 }
 
 /* crypto engine open function. */
@@ -6247,7 +6441,11 @@ void *qce_open(struct platform_device *pdev, int *rc)
 	}
 	*rc = 0;
 
+	tasklet_init(&pce_dev->core_irq_bottom_half,
+		     qce_core_irq_bottom_half, (unsigned long)pce_dev);
+	qce_core_irq_init(pce_dev);
 	qce_init_ce_cfg_val(pce_dev);
+	qce_parse_soc_revision(pce_dev);
 	*rc  = qce_sps_init(pce_dev);
 	if (*rc)
 		goto err;
@@ -6299,6 +6497,7 @@ int qce_close(void *handle)
 		return -ENODEV;
 
 	mutex_lock(&qce_iomap_mutex);
+	qce_core_irq_remove(pce_dev);
 	qce_enable_clk(pce_dev);
 	qce_sps_exit(pce_dev);
 

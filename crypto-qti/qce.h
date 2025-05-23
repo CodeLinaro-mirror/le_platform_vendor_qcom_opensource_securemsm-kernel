@@ -3,7 +3,7 @@
  * QTI Crypto Engine driver API
  *
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef __CRYPTO_MSM_QCE_H
@@ -62,8 +62,10 @@
 #define CRYPTO_AVG_BW			384
 #define CRYPTO_PEAK_BW			384
 
+struct qce_error;
 typedef void (*qce_comp_func_ptr_t)(void *areq,
 		unsigned char *icv, unsigned char *iv, int ret);
+typedef void (*qce_error_func_ptr_t)(void *areq, struct qce_error *qce_err);
 
 /* Cipher algorithms supported */
 enum qce_cipher_alg_enum {
@@ -179,6 +181,7 @@ struct qce_sha_req {
 struct qce_req {
 	enum qce_req_op_enum op;	/* operation type */
 	qce_comp_func_ptr_t qce_cb;	/* call back */
+	qce_error_func_ptr_t qce_err_cb;	/* call back */
 	void *areq;
 	enum qce_cipher_alg_enum   alg;	/* cipher algorithms*/
 	enum qce_cipher_dir_enum dir;	/* encryption? decryption? */
@@ -243,4 +246,5 @@ void qce_dump_req(void *handle);
 void qce_get_crypto_status(void *handle, struct qce_error *error);
 int qce_manage_timeout(void *handle, int req_info);
 int qce_set_irqs(void *handle, bool enable);
+bool qce_supports_core_irqs(void *handle);
 #endif /* __CRYPTO_MSM_QCE_H */

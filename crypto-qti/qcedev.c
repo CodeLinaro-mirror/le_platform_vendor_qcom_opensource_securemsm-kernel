@@ -256,6 +256,8 @@ static int start_offload_cipher_req(struct qcedev_control *podev,
 				int *current_req_info);
 static int start_sha_req(struct qcedev_control *podev,
 			 int *current_req_info);
+static void qcedev_areq_set_qce_error(struct qcedev_async_req *qcedev_areq,
+				      struct qce_error *err);
 
 static const struct file_operations qcedev_fops = {
 	.owner = THIS_MODULE,
@@ -364,7 +366,7 @@ static void req_done(unsigned long data)
 
 	if (areq) {
 		areq->state = QCEDEV_REQ_DONE;
-		if (!areq->timed_out)
+		if (!areq->timed_out && !areq->failed)
 			complete(&areq->complete);
 	}
 
@@ -411,7 +413,6 @@ void qcedev_sha_req_cb(void *cookie, unsigned char *digest,
 
 	tasklet_schedule(&pdev->done_tasklet);
 };
-
 
 void qcedev_cipher_req_cb(void *cookie, unsigned char *icv,
 	unsigned char *iv, int ret)
@@ -535,6 +536,7 @@ static int start_cipher_req(struct qcedev_control *podev,
 	}
 
 	creq.qce_cb = qcedev_cipher_req_cb;
+	creq.qce_err_cb = NULL;
 	creq.areq = (void *)&qcedev_areq->cipher_req;
 	creq.flags = 0;
 	creq.offload_op = QCE_OFFLOAD_NONE;
@@ -545,6 +547,27 @@ unsupported:
 
 	return ret;
 };
+
+void qcedev_offload_cipher_req_err_cb(void *cookie, struct qce_error *qce_err)
+{
+	struct qcedev_cipher_req *areq;
+	struct qcedev_handle *handle;
+	struct qcedev_control *podev;
+	struct qcedev_async_req *qcedev_areq;
+
+	areq = (struct qcedev_cipher_req *)cookie;
+	if (!areq || !areq->cookie)
+		return;
+	handle = (struct qcedev_handle *)areq->cookie;
+	podev = handle->cntl;
+	if (!podev)
+		return;
+	qcedev_areq = podev->active_command;
+
+	qcedev_areq_set_qce_error(qcedev_areq, qce_err);
+	qcedev_areq->failed = true;
+	complete(&qcedev_areq->complete);
+}
 
 void qcedev_offload_cipher_req_cb(void *cookie, unsigned char *icv,
 			      unsigned char *iv, int ret)
@@ -658,6 +681,7 @@ static int start_offload_cipher_req(struct qcedev_control *podev,
 	creq.cryptlen = qcedev_areq->cipher_req.creq.cryptlen;
 
 	creq.qce_cb = qcedev_offload_cipher_req_cb;
+	creq.qce_err_cb = qcedev_offload_cipher_req_err_cb;
 	creq.areq = (void *)&qcedev_areq->cipher_req;
 
 	patt_sz = qcedev_areq->offload_cipher_op_req.pattern_info.patt_sz;
@@ -762,44 +786,33 @@ static int start_sha_req(struct qcedev_control *podev,
 	return ret;
 };
 
-static void qcedev_check_crypto_status(struct qcedev_async_req *qcedev_areq,
-				       void *handle)
+static void qcedev_areq_set_qce_error(struct qcedev_async_req *qcedev_areq,
+				      struct qce_error *qce_err)
 {
-	struct qce_error error = { 0 };
+	enum qcedev_offload_err_enum *err =
+		&qcedev_areq->offload_cipher_op_req.err;
 
-	qcedev_areq->offload_cipher_op_req.err = QCEDEV_OFFLOAD_NO_ERROR;
-	qce_get_crypto_status(handle, &error);
+	*err = QCEDEV_OFFLOAD_NO_ERROR;
 
-	if (error.timer_error) {
-		qcedev_areq->offload_cipher_op_req.err =
-			QCEDEV_OFFLOAD_KEY_TIMER_EXPIRED_ERROR;
-	} else if (error.key_paused) {
-		qcedev_areq->offload_cipher_op_req.err =
-			QCEDEV_OFFLOAD_KEY_PAUSE_ERROR;
-	} else if (error.generic_error) {
-		qcedev_areq->offload_cipher_op_req.err =
-			QCEDEV_OFFLOAD_GENERIC_ERROR;
-	} else if (error.key_index_oob) {
-		qcedev_areq->offload_cipher_op_req.err =
-			QCEDEV_OFFLOAD_KEY_INDEX_OUT_OF_BOUNDS_ERROR;
-	} else if (error.key_usage) {
-		qcedev_areq->offload_cipher_op_req.err =
-			QCEDEV_OFFLOAD_KEY_USAGE_ERROR;
-	} else if (error.key_size) {
-		qcedev_areq->offload_cipher_op_req.err =
-			QCEDEV_OFFLOAD_KEY_SIZE_ERROR;
-	} else if (error.key_auth) {
-		qcedev_areq->offload_cipher_op_req.err =
-			QCEDEV_OFFLOAD_KEY_PERM_ERROR;
-	} else if (error.key_empty) {
-		qcedev_areq->offload_cipher_op_req.err =
-			QCEDEV_OFFLOAD_KEY_EMPTY_ERROR;
-	}
+	if (qce_err->timer_error)
+		*err = QCEDEV_OFFLOAD_KEY_TIMER_EXPIRED_ERROR;
+	else if (qce_err->key_paused)
+		*err = QCEDEV_OFFLOAD_KEY_PAUSE_ERROR;
+	else if (qce_err->generic_error)
+		*err = QCEDEV_OFFLOAD_GENERIC_ERROR;
+	else if (qce_err->key_index_oob)
+		*err = QCEDEV_OFFLOAD_KEY_INDEX_OUT_OF_BOUNDS_ERROR;
+	else if (qce_err->key_usage)
+		*err = QCEDEV_OFFLOAD_KEY_USAGE_ERROR;
+	else if (qce_err->key_size)
+		*err = QCEDEV_OFFLOAD_KEY_SIZE_ERROR;
+	else if (qce_err->key_auth)
+		*err = QCEDEV_OFFLOAD_KEY_PERM_ERROR;
+	else if (qce_err->key_empty)
+		*err = QCEDEV_OFFLOAD_KEY_EMPTY_ERROR;
 
 	return;
 }
-
-#define MAX_RETRIES	333
 
 static int submit_req(struct qcedev_async_req *qcedev_areq,
 					struct qcedev_handle *handle)
@@ -811,9 +824,9 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 	int current_req_info = 0;
 	int wait = MAX_CRYPTO_WAIT_TIME;
 	struct qcedev_async_req *new_req = NULL;
-	int retries = 0;
 	int req_wait = MAX_REQUEST_TIME;
 	unsigned int crypto_wait = 0;
+	struct qce_error qce_err = {};
 
 	qcedev_areq->err = 0;
 	podev = handle->cntl;
@@ -841,6 +854,8 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 				ret = start_offload_cipher_req(podev,
 						&current_req_info);
 				crypto_wait = MAX_OFFLOAD_CRYPTO_WAIT_TIME;
+				if (qce_supports_core_irqs(podev->qce))
+					crypto_wait = MAX_CRYPTO_WAIT_TIME;
 				break;
 			default:
 				crypto_wait = MAX_CRYPTO_WAIT_TIME;
@@ -891,39 +906,38 @@ static int submit_req(struct qcedev_async_req *qcedev_areq,
 		wait = wait_for_completion_timeout(&qcedev_areq->complete,
 				msecs_to_jiffies(crypto_wait));
 
-	if (!wait) {
-	/*
-	 * This means wait timed out, and the callback routine was not
-	 * exercised. The callback sequence does some housekeeping which
-	 * would be missed here, hence having a call to qce here to do
-	 * that.
-	 */
-		pr_err("%s: wait timed out, req info = %d\n", __func__,
-					current_req_info);
+	if (wait == 0 || qcedev_areq->failed) {
 		spin_lock_irqsave(&podev->lock, flags);
-		qcedev_areq->timed_out = true;
-		spin_unlock_irqrestore(&podev->lock, flags);
-		qcedev_check_crypto_status(qcedev_areq, podev->qce);
-		if (qcedev_areq->offload_cipher_op_req.err ==
-			QCEDEV_OFFLOAD_NO_ERROR) {
-			pr_err("%s: no error, wait for request to be done", __func__);
-			while (qcedev_areq->state != QCEDEV_REQ_DONE &&
-				retries < MAX_RETRIES) {
-				usleep_range(3000, 5000);
-				retries++;
-				pr_err("%s: waiting for req state to be done, retries = %d",
-					__func__, retries);
+		if (qcedev_areq->state != QCEDEV_REQ_DONE) {
+			/**
+			 * This means wait timed out, and the callback routine was not
+			 * exercised. The callback sequence does some housekeeping which
+			 * would be missed here, hence having a call to qce here to do
+			 * that.
+			 */
+			spin_unlock_irqrestore(&podev->lock, flags);
+			if (wait == 0) {
+				qcedev_areq->timed_out = true;
+				pr_err("%s: req info: %d timed out.\n",
+				       __func__, current_req_info);
+				qce_get_crypto_status(podev->qce, &qce_err);
+				qcedev_areq_set_qce_error(qcedev_areq,
+							  &qce_err);
+			} else {
+				pr_err("%s: req info: %d failed with %ums remaining.\n",
+				       __func__, current_req_info,
+				       jiffies_to_msecs(wait));
 			}
-			return 0;
-		}
-		ret = qce_manage_timeout(podev->qce, current_req_info);
-		if (ret)
-			pr_err("%s: error during manage timeout", __func__);
 
-		req_done((unsigned long) podev);
-		if (qcedev_areq->offload_cipher_op_req.err !=
-						QCEDEV_OFFLOAD_NO_ERROR)
-			return 0;
+			ret = qce_manage_timeout(podev->qce, current_req_info);
+			if (ret)
+				pr_err("%s: error during manage timeout ret=%d.\n",
+				       __func__, ret);
+			req_done((unsigned long)podev);
+		} else {
+			/* Appeared to time out, but request was already done. */
+			spin_unlock_irqrestore(&podev->lock, flags);
+		}
 	}
 
 	if (ret)
@@ -1832,9 +1846,16 @@ static int qcedev_smmu_ablk_offload_cipher(struct qcedev_async_req *areq,
 			byte_offset = 0; /* TEMP */
 
 			err = submit_req(areq, handle);
+			/* Error in the submission of the request. */
 			if (err) {
 				pr_err("%s: Error processing req, err = %d\n",
 				       __func__, err);
+				goto exit;
+			}
+			/* Error in the actual crypto request. */
+			if (areq->offload_cipher_op_req.err != QCEDEV_OFFLOAD_NO_ERROR) {
+				pr_err("%s: Error processing req, err = %d\n",
+						__func__, err);
 				goto exit;
 			}
 			/* update data len to be processed */
@@ -3065,6 +3086,12 @@ static void qcedev_exit(void)
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("QTI DEV Crypto driver");
+
+#if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
+MODULE_IMPORT_NS("DMA_BUF");
+#else
 MODULE_IMPORT_NS(DMA_BUF);
+#endif
+
 module_init(qcedev_init);
 module_exit(qcedev_exit);

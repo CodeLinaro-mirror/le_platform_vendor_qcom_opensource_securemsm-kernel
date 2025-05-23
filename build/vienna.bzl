@@ -13,10 +13,12 @@ def define_vienna():
             "qrng_dlkm",
             "qcrypto-msm_dlkm",
             "smmu_proxy_dlkm",
+            "tmecom-intf_dlkm",
          ],
          extra_options = [
             "CONFIG_QCOM_SMCINVOKE",
             "CONFIG_QSEECOM_COMPAT",
             "CONFIG_QCOM_SI_CORE",
+            "CONFIG_MSM_TMECOM_QMP",
          ],
      )

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2023, 2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #include <linux/cdev.h>
@@ -21,8 +21,8 @@ static struct csf_version cached_csf_version;
 int smmu_proxy_get_csf_version(struct csf_version *csf_version)
 {
 	int ret;
-	struct Object client_env = {0};
-	struct Object sc_object;
+	struct Object client_env = Object_NULL;
+	struct Object sc_object = Object_NULL;
 
 	/* Assumption is that cached_csf_version.arch_ver !=0 ==> other vals are set */
 	if (cached_csf_version.arch_ver != 0) {
@@ -37,23 +37,19 @@ int smmu_proxy_get_csf_version(struct csf_version *csf_version)
 	if (ret) {
 		pr_err("%s: Failed to get env object rc: %d\n", __func__,
 		       ret);
-		Object_release(client_env);
-		return ret;
+		goto cleanup;
 	}
 
 	ret = IClientEnv_open(client_env, CTrustedCameraDriver_UID, &sc_object);
 	if (ret) {
 		pr_err("%s: Failed to get seccam object rc: %d\n", __func__,
 		       ret);
-		return ret;
+		goto cleanup;
 	}
 
 	ret = ITrustedCameraDriver_getVersion(sc_object, &csf_version->arch_ver,
 					      &csf_version->max_ver,
 					      &csf_version->min_ver);
-
-	Object_release(sc_object);
-	Object_release(client_env);
 
 	/*
 	 * Once we set cached_csf_version.arch_ver, concurrent callers will get
@@ -63,6 +59,9 @@ int smmu_proxy_get_csf_version(struct csf_version *csf_version)
 	cached_csf_version.max_ver = csf_version->max_ver;
 	cached_csf_version.arch_ver = csf_version->arch_ver;
 
+cleanup:
+	Object_RELEASE_IF(sc_object);
+	Object_RELEASE_IF(client_env);
 	return ret;
 }
 EXPORT_SYMBOL(smmu_proxy_get_csf_version);

@@ -1810,5 +1810,11 @@ module_platform_driver(smcinvoke_plat_driver);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("smcinvoke driver");
+#if (KERNEL_VERSION(6, 13, 0) <= LINUX_VERSION_CODE)
+MODULE_IMPORT_NS("VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver");
+MODULE_IMPORT_NS("DMA_BUF");
+#else
 MODULE_IMPORT_NS(VFS_internal_I_am_really_a_filesystem_and_am_NOT_a_driver);
 MODULE_IMPORT_NS(DMA_BUF);
+#endif
+
