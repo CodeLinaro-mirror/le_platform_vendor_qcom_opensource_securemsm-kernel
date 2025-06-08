@@ -1978,12 +1978,6 @@ static int qcedev_check_cipher_params(struct qcedev_cipher_op_req *req,
 		}
 	}
 
-	if (req->data_len < req->byteoffset) {
-		pr_err("%s: req data length %u is less than byteoffset %u\n",
-				__func__, req->data_len, req->byteoffset);
-		goto error;
-	}
-
 	/* Ensure IV size */
 	if (req->ivlen > QCEDEV_MAX_IV_SIZE) {
 		pr_err("%s: ivlen is not correct: %u\n", __func__, req->ivlen);
@@ -2188,12 +2182,6 @@ qcedev_check_extended_cipher_params(struct qcedev_extended_cipher_req *req,
 			}
 			total += req->vbuf.src[i].len;
 		}
-	}
-
-	if (req->data_len < req->byte_offset) {
-		pr_err("%s: req data length %llu is less than byteoffset %u\n",
-				__func__, req->data_len, req->byte_offset);
-		goto error;
 	}
 
 	/* Ensure IV size */

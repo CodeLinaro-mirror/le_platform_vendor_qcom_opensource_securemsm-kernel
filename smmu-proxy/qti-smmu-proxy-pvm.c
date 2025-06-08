@@ -87,8 +87,15 @@ int smmu_proxy_unmap(void *data)
 	} while (--retry_cnt);
 
 	resp = buf;
+	if (size != sizeof(struct smmu_proxy_unmap_resp) || resp == NULL) {
+		pr_err_ratelimited("%s: Unmap call failed with invalid response: %d\n",
+				__func__, ret);
+		ret = -EINVAL;
+		goto free_buf;
+	}
+
 	if (resp->hdr.ret) {
-		ret = resp->hdr.ret;
+		ret = -EINVAL;
 		pr_err("%s: Unmap call failed on remote VM, rc: %d\n", __func__,
 		       resp->hdr.ret);
 	}
@@ -177,10 +184,17 @@ int smmu_proxy_switch_sid(struct device *client_dev, u32 op)
 	} while (--retry_cnt);
 
 	resp = buf;
+	if (size != sizeof(struct smmu_proxy_switch_sid_resp) || resp == NULL) {
+		pr_err_ratelimited("%s: Switch call failed with invalid response: %d\n",
+				__func__, ret);
+		ret = -EINVAL;
+		goto free_buf;
+	}
+
 	if (resp->hdr.ret) {
-		ret = resp->hdr.ret;
 		pr_err("%s: Switch call failed on remote VM, rc: %d\n", __func__,
 		       resp->hdr.ret);
+		ret = -EINVAL;
 	}
 
 	if (resp->hdr.msg_type != SMMU_PROXY_SWITCH_SID_RESP) {
@@ -290,10 +304,17 @@ int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova,
 	do {
 		ret = gh_msgq_recv_killable(msgq_hdl, buf, sizeof(*resp), &size, flags);
 		if (ret >= 0) {
+			if (size != sizeof(struct smmu_proxy_map_resp) || resp == NULL) {
+				pr_err_ratelimited("%s: Map call failed with invalid response: %d\n",
+						__func__, ret);
+				ret = -EINVAL;
+				goto free_buf;
+			}
+
 			if (resp->hdr.ret) {
-				ret = resp->hdr.ret;
 				pr_err_ratelimited("%s: Map call failed on remote VM, rc: %d\n",
 						__func__, resp->hdr.ret);
+				ret = -EINVAL;
 				goto free_buf;
 			}
 

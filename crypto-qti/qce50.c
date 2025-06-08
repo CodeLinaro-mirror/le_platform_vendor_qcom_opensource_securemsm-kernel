@@ -6408,7 +6408,7 @@ void *qce_open(struct platform_device *pdev, int *rc)
 		atomic_set(&pce_dev->ce_request_info[i].in_use, false);
 	pce_dev->ce_request_index = 0;
 
-	pce_dev->memsize = 10 * PAGE_SIZE * MAX_QCE_ALLOC_BAM_REQ;
+	pce_dev->memsize = ALIGN((MAX_QCE_ALLOC_BAM_REQ*40960), PAGE_SIZE);
 	pce_dev->coh_vmem = dma_alloc_coherent(pce_dev->pdev,
 			pce_dev->memsize, &pce_dev->coh_pmem, GFP_KERNEL);
 
