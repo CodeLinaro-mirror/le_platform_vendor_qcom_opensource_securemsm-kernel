@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/dma-mapping.h>
@@ -267,10 +267,6 @@ int qcedev_check_and_map_buffer(void *handle,
 		*vaddr = binfo->ion_buf.smmu_device_address;
 		mapped_size = binfo->ion_buf.mapped_buf_size;
 		atomic_inc(&binfo->ref_count);
-		/* Add buffer mapping information to regd buffer list */
-		mutex_lock(&qce_hndl->registeredbufs.lock);
-		list_add_tail(&binfo->list, &qce_hndl->registeredbufs.list);
-		mutex_unlock(&qce_hndl->registeredbufs.lock);
 	}
 	/* Make sure the offset is within the mapped range */
 	if (offset >= mapped_size) {
@@ -280,6 +276,14 @@ int qcedev_check_and_map_buffer(void *handle,
 		rc = -ERANGE;
 		goto unmap;
 	}
+
+	if (!found) {
+		/* Add buffer mapping information to regd buffer list */
+		mutex_lock(&qce_hndl->registeredbufs.lock);
+		list_add_tail(&binfo->list, &qce_hndl->registeredbufs.list);
+		mutex_unlock(&qce_hndl->registeredbufs.lock);
+	}
+
 	/* return the mapped virtual address adjusted by offset */
 	*vaddr += offset;
 
@@ -287,9 +291,6 @@ int qcedev_check_and_map_buffer(void *handle,
 unmap:
 	if (!found) {
 		msm_gpce_ion_smmu_unmap(&(binfo->ion_buf), drv_handles);
-		mutex_lock(&qce_hndl->registeredbufs.lock);
-		list_del(&binfo->list);
-		mutex_unlock(&qce_hndl->registeredbufs.lock);
 	}
 error:
 	kfree(binfo);
@@ -360,4 +361,3 @@ int qcedev_unmap_all_buffers(void *handle, struct qce_fe_drv_hab_handles *drv_ha
 	pr_info("%s: Done successfully\n", __func__);
 	return 0;
 }
-
