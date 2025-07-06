@@ -1,7 +1,6 @@
 ENABLE_SECUREMSM_DLKM := true
 ENABLE_SECUREMSM_QTEE_DLKM := true
 ENABLE_QCEDEV_FE := false
-ENABLE_SI_CORE_TEST := false
 
 ifeq ($(TARGET_KERNEL_DLKM_DISABLE), true)
   ifeq ($(TARGET_KERNEL_DLKM_SECURE_MSM_OVERRIDE), false)
@@ -22,14 +21,6 @@ ifeq ($(ENABLE_SECUREMSM_DLKM), true)
   ifeq ($(filter $(TARGET_BOARD_PLATFORM), canoe vienna),$(TARGET_BOARD_PLATFORM))
     ENABLE_TMECOM_INTF_DLKM := true
   endif
-  #enable QCEDEV_FE driver only on Automotive Lemans HQX LA GVM.
-  ifeq ($(ENABLE_HYP),true)
-    ifeq ($(TARGET_BOARD_PLATFORM),gen4)
-      ifneq ($(TARGET_USES_GY), true)
-        ENABLE_QCEDEV_FE := true
-      endif #TARGET_USES_GY
-    endif #TARGET_BOARD_PLATFORM
-  endif #ENABLE_HYP
 endif #ENABLE_SECUREMSM_DLKM
 
 ifeq ($(ENABLE_SECUREMSM_QTEE_DLKM), true)
@@ -41,15 +32,51 @@ ifeq ($(ENABLE_SECUREMSM_QTEE_DLKM), true)
   endif #TARGET_ENABLE_QSEECOM OR TARGET_BOARD_AUTO
 endif #ENABLE_SECUREMSM_QTEE_DLKM
 
-ifeq ($(TARGET_USES_GY), true)
-  ENABLE_QCRYPTO_DLKM := false
-  ENABLE_HDCP_QSEECOM_DLKM := false
-  ENABLE_QRNG_DLKM := true
-  ENABLE_SMMU_PROXY := false
-  ENABLE_SMCINVOKE_DLKM := true
-  ENABLE_TZLOG_DLKM := false
-  ENABLE_QSEECOM_DLKM := false
-endif #TARGET_USES_GY
+#Module configuration for gen3 targets on HQX platform.
+ifeq ($(TARGET_BOARD_PLATFORM), msmnile)
+  ifeq ($(ENABLE_HYP), true)
+    ENABLE_TZLOG_DLKM := false
+    ENABLE_QCRYPTO_DLKM := false
+    ENABLE_HDCP_QSEECOM_DLKM := false
+    ENABLE_SMCINVOKE_DLKM := false
+  endif
+endif
+
+#Module configuration for gen4.5 targets on HGY platform.
+ifeq ($(TARGET_BOARD_PLATFORM), gen4)
+  ifeq ($(ENABLE_HYP), true)
+    ifeq ($(TARGET_USES_GY), true)
+      ENABLE_TZLOG_DLKM := false
+      ENABLE_QCRYPTO_DLKM := false
+      ENABLE_HDCP_QSEECOM_DLKM := false
+      ENABLE_QSEECOM_DLKM := false
+    endif
+  endif
+endif
+
+#Module configuration for gen4.5 targets on HQX platform.
+ifeq ($(TARGET_BOARD_PLATFORM), gen4)
+  ifeq ($(ENABLE_HYP), true)
+    ifneq ($(TARGET_USES_GY), true)
+      ENABLE_TZLOG_DLKM := false
+      ENABLE_QCRYPTO_DLKM := false
+      ENABLE_HDCP_QSEECOM_DLKM := false
+      ENABLE_SMCINVOKE_DLKM := false
+      ENABLE_QCEDEV_FE := true
+    endif
+  endif
+endif
+
+#Module configuration for gen5 targets on HQX/HGY platforms.
+ifeq ($(TARGET_BOARD_PLATFORM), gen5)
+  ifeq ($(ENABLE_HYP), true)
+    ENABLE_TZLOG_DLKM := false
+    ENABLE_QCRYPTO_DLKM := false
+    ENABLE_HDCP_QSEECOM_DLKM := false
+    ENABLE_QSEECOM_DLKM := false
+  endif
+endif
+
 
 ifeq ($(ENABLE_QCRYPTO_DLKM), true)
 BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/qcedev-mod_dlkm.ko \
@@ -80,12 +107,6 @@ BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
 BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
 BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
 endif #ENABLE_SMCINVOKE_DLKM
-
-ifeq ($(ENABLE_SI_CORE_TEST), true)
-BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/si_core_test.ko
-BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/si_core_test.ko
-BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD += $(KERNEL_MODULES_OUT)/si_core_test.ko
-endif #ENABLE_SI_CORE_TEST
 
 ifeq ($(ENABLE_TMECOM_INTF_DLKM), true)
 BOARD_VENDOR_KERNEL_MODULES +=  $(KERNEL_MODULES_OUT)/tmecom-intf_dlkm.ko

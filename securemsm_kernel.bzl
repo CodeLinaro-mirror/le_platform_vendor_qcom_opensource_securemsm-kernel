@@ -102,6 +102,14 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
             "//build/kernel/kleaf:socrepo_false": [],
         })
 
+    if target == "autogvm":
+        deps += select({
+            "//build/kernel/kleaf:socrepo_true": [
+                "//soc-repo:{}/drivers/soc/qcom/hab/msm_hab".format(kernel_build_variant),
+            ],
+            "//build/kernel/kleaf:socrepo_false": [],
+        })
+
     target_local_defines = ["SMCINVOKE_TRACE_INCLUDE_PATH=../../../{}/smcinvoke/compat".format(native.package_name())]
 
     for config in extra_options:

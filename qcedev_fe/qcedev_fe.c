@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #include <linux/version.h>
 #include <linux/init.h>
@@ -265,7 +265,11 @@ static int __init qce_fe_init(void)
 		goto unregister_chrdev_region_error;
 	}
 
+#if (KERNEL_VERSION(6, 3, 0) <= LINUX_VERSION_CODE)
+	class_qce_fe = class_create("qce");
+#else
 	class_qce_fe = class_create(THIS_MODULE, "qce");
+#endif
 	if (IS_ERR_OR_NULL(class_qce_fe)) {
 		pr_err("%s: class_create() failed\n", __func__);
 		ret = -EFAULT;

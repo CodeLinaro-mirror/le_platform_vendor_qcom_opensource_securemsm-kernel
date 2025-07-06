@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2016-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "tz_log :[%s]: " fmt, __func__
@@ -823,6 +823,17 @@ static uint32_t _copy_to_dispbuf(struct tzdbg_log_t *log, struct tzdbg_log_pos_t
 }
 
 #if (KERNEL_VERSION(6, 12, 0) <= LINUX_VERSION_CODE) && defined(CONFIG_TZLOG_TIME_CONSOLIDATE)
+/*
+ * Calculate the length of log based on the end label "\r\n"
+ *
+ * Input  : buf : the initial log data buffer
+ *          begin : the begin index of buffer
+ *          end : the end index of buffer
+ *          remain : the maxinum length of buffer that can be used to parse
+ *          log_len : the length of the ring buffer
+ *
+ * Return : len for the length of log that is ended with "\r\n" or -EINVAL for failure
+ */
 static int _find_end_label(const uint8_t *buf, uint32_t begin, uint32_t end, uint32_t remain,
 	uint32_t log_len)
 {
@@ -841,13 +852,29 @@ static int _find_end_label(const uint8_t *buf, uint32_t begin, uint32_t end, uin
 	return -EINVAL;
 }
 
+/*
+ * Parse the log with the format "[ticks]...\r\n" to extract the ticks information. Calculate the
+ * corresponding real-time and generate a timestamp string in the format
+ * [realtime][hlos uptime][tz uptime].
+ *
+ * Input  : buf : the initial log data buffer
+ *          begin : the begin index of log data in the buffer
+ *          len : the length of log data buffer
+ *          round : the length of the ring buffer
+ *          stamp_len : the length of the timestamp string buffer
+ *
+ * Output : timestamp : the timetamp string buffer
+ *          next : the position next to ']'.
+ *
+ * Return : len for the size of timestamp string or -EINVAL for failure.
+ */
 static int _generate_realtime_timestamp(const char *buf, uint32_t begin, uint32_t len,
 	uint32_t round,	char *timestamp, uint32_t stamp_len, uint32_t *next)
 {
 	uint32_t index = 0;
 	uint64_t ticks = 0;
 	char ticks_str[TICKS_STR_LEN] = {0};
-	ktime_t hlos_t = 0;
+	ktime_t hlos_t = g_hlos_uptime_baseline;
 	ktime_t hlos_realtime_t = 0;
 	ktime_t tz_t = 0;
 	struct timespec64 hlos_ts = {};
@@ -856,10 +883,12 @@ static int _generate_realtime_timestamp(const char *buf, uint32_t begin, uint32_
 	struct rtc_time hlos_rtc_t = {};
 	uint32_t size = 0;
 
-	// Considering three situations.
-	// 1. Normal log : [ticks]... --> parse the ticks.
-	// 2. Abnormal log : [invalid ticks]...--> Not parse the ticks.
-	// 3. Abnormal log : XXX]... --> Not parse the ticks.
+	/*
+	 * Considering three situations about ticks.
+	 * 1. Normal log : [ticks]... --> parse the ticks.
+	 * 2. Abnormal log : [invalid ticks]...--> Not parse the ticks.
+	 * 3. Abnormal log : XXX]... --> Not parse the ticks.
+	 */
 	if (buf[begin] != '[')
 		return -EINVAL;
 
@@ -879,9 +908,7 @@ static int _generate_realtime_timestamp(const char *buf, uint32_t begin, uint32_
 	if (index == len || index == sizeof(ticks_str))
 		return -EINVAL;
 
-	hlos_t = g_hlos_uptime_baseline;
-
-	// Calculate the relevant hlos uptime based on hlos uptime baseline and tz time interval.
+	/* Calculate the relevant hlos uptime based on hlos uptime baseline and tz time interval. */
 	if (likely(ticks > g_tz_ticks_baseline))
 		hlos_t += (ticks - g_tz_ticks_baseline) * US_TO_10_NS_BASE / g_tz_ticks_frequency;
 	else
@@ -895,7 +922,7 @@ static int _generate_realtime_timestamp(const char *buf, uint32_t begin, uint32_
 	tz_ts = ktime_to_timespec64(tz_t);
 
 	size = scnprintf(timestamp, stamp_len,
-			"[%02d-%02d %02d:%02d:%02d.%05ld][%lld:%05ld][%lld:%05ld]",
+			"[%02d-%02d %02d:%02d:%02d.%05ld][%lld.%05ld][%lld.%05ld]",
 			hlos_rtc_t.tm_mon + 1, hlos_rtc_t.tm_mday,
 			hlos_rtc_t.tm_hour, hlos_rtc_t.tm_min,
 			hlos_rtc_t.tm_sec, hlos_realtime_ts.tv_nsec / NS_TO_10_US_BASE,
@@ -905,6 +932,22 @@ static int _generate_realtime_timestamp(const char *buf, uint32_t begin, uint32_
 	return size;
 }
 
+/*
+ * Parse log data, enhance it with additional time information and copy it into disp buffer.
+ *
+ * Original log format : [ticks]log data\r\n
+ * New log format with real-time : [ticks][hlos real-time][hlos uptime][tz uptime]log data\r\n
+ *
+ * Input  : log : the initial log data information including log data and end index of log buffer
+ *          log_start : information prepared for log reading including begin index
+ *          round : the length of ring buffer
+ *          max_len : the maxinum length of disp buffer that is used to store log data
+ *          index : the start index of disp
+ *
+ * Output : disp : the log buffer with real-time information
+ *
+ * Return : the length of the written log buffer
+ */
 static uint32_t _copy_to_dispbuf_with_realtime(struct tzdbg_log_t *log,
 	struct tzdbg_log_pos_t *log_start, uint32_t round, uint32_t max_len, uint8_t *disp,
 	uint32_t index)
@@ -922,8 +965,10 @@ static uint32_t _copy_to_dispbuf_with_realtime(struct tzdbg_log_t *log,
 	if (round == 0)
 		return 0;
 
+	pr_debug("tzdbg_log begin = %u, end = %u, round = %u, disp_buf max_len = %u, index = %u\n",
+		begin, end, round, max_len, index);
+
 	while ((begin != end) && (len < max_len)) {
-		remain = max_len - len;
 		/*
 		 * There will be three main type of log buffer.
 		 * 1. Nomal log ends with \r\n. It will add the realtime information.
@@ -933,10 +978,15 @@ static uint32_t _copy_to_dispbuf_with_realtime(struct tzdbg_log_t *log,
 		each_log_len = _find_end_label(log->log_buf, begin, end, remain, round);
 		if (each_log_len == -EINVAL) {
 			if (len == 0) {
-				// To copy the buffer, considering that the initial buffer passed
-				// from user space is insufficient for the entire log line
+				/*
+				 * "0" indicates that it is the first time real-time information is
+				 * being added. Due to an error caused by insufficient buffer space
+				 * passed from user space, there is not enough buffer space to add
+				 * any real-time information. Consequently, tz_log can only copy the
+				 * initial buffer into user space.
+				 */
 				len += _copy_to_dispbuf(log, log_start, round, remain, disp, index);
-				pr_warn("Read an incomplete log.\n");
+				pr_warn("Read an incomplete log and copy to disp. len = %u\n", len);
 			}
 			break;
 		}
@@ -949,13 +999,16 @@ static uint32_t _copy_to_dispbuf_with_realtime(struct tzdbg_log_t *log,
 				timestamp, sizeof(timestamp), &next);
 		if (stamp_len != -EINVAL) {
 			if (stamp_len <= (remain - each_log_len)) {
+				/* copy the ticks and timestamp into disp buffer. */
 				index += _copy_to_dispbuf(log, log_start, round, next, disp, index);
 				copy_len -= next;
 				len += next;
 				memcpy(disp + index, timestamp, stamp_len);
 				index += (uint32_t)stamp_len;
 				len += (uint32_t)stamp_len;
-			} else if (len != 0) {
+			} else {
+				pr_debug("Insufficient buffer for the log with real-time!Remain size is %u, expected size is %u\n",
+					remain, each_log_len + stamp_len);
 				/*
 				 * There are two main reasons for the insufficient buffer. One is
 				 * that there is already some log data in it when the length is not
@@ -964,14 +1017,22 @@ static uint32_t _copy_to_dispbuf_with_realtime(struct tzdbg_log_t *log,
 				 * the next round of reading from user space. For the latter reason,
 				 * the initial log data will be copied to user space.
 				 */
-				break;
+				if (len != 0)
+					break;
 			}
 		}
 
+		/*
+		 * 1. Update the information about disp, including the starting index, the length
+		 *    that has been copied and remainning length.
+		 * 2. Update the next data reading index of log.
+		 */
 		index += _copy_to_dispbuf(log, log_start, round, copy_len, disp, index);
 		len += copy_len;
-
+		remain = max_len - len;
 		begin = (begin + each_log_len) % round;
+		pr_debug("log len = %d, timestamp len = %d, total copy len = %u, disp buf index = %u, remain = %u, tzdbg_log begin = %u.\n",
+			each_log_len, stamp_len, len, index, remain, begin);
 	}
 
 	return len;
@@ -1078,6 +1139,22 @@ static uint32_t _copy_to_dispbuf_v2(struct tzdbg_log_v2_t *log,
 }
 
 #if (KERNEL_VERSION(6, 12, 0) <= LINUX_VERSION_CODE) && defined(CONFIG_TZLOG_TIME_CONSOLIDATE)
+/*
+ * Parse log data, enhance it with additional time information and copy it into disp buffer.
+ *
+ * Original log format : [ticks]log data\r\n
+ * New log format with real-time : [ticks][hlos real-time][hlos uptime][tz uptime]log data\r\n
+ *
+ * Input  : log : the initial log data information including log data and end index of log buffer
+ *          log_start : information prepared for log reading including begin index
+ *          round : the length of ring buffer
+ *          max_len : the maxinum length of disp buffer that is used to store log data
+ *          index : the start index of disp
+ *
+ * Output : disp : the log buffer with real-time information
+ *
+ * Return : the length of the written log buffer
+ */
 static uint32_t _copy_to_dispbuf_with_realtime_v2(struct tzdbg_log_v2_t *log,
 	struct tzdbg_log_pos_v2_t *log_start, uint32_t round, uint32_t max_len, uint8_t *disp,
 	uint32_t index)
@@ -1095,8 +1172,10 @@ static uint32_t _copy_to_dispbuf_with_realtime_v2(struct tzdbg_log_v2_t *log,
 	if (round == 0)
 		return 0;
 
+	pr_debug("tzdbg_log begin = %u, end = %u, round = %u, disp_buf max_len = %u, index = %u\n",
+		begin, end, round, max_len, index);
+
 	while ((begin != end) && (len < max_len)) {
-		remain = max_len - len;
 		/*
 		 * There will be three main type of log buffer.
 		 * 1. Nomal log ends with \r\n. It will add the realtime information.
@@ -1106,11 +1185,16 @@ static uint32_t _copy_to_dispbuf_with_realtime_v2(struct tzdbg_log_v2_t *log,
 		each_log_len = _find_end_label(log->log_buf, begin, end, remain, round);
 		if (each_log_len == -EINVAL) {
 			if (len == 0) {
-				// To copy the buffer, considering that the initial buffer passed
-				// from user space is insufficient for the entire log line
+				/*
+				 * "0" indicates that it is the first time real-time information is
+				 * being added. Due to an error caused by insufficient buffer space
+				 * passed from user space, there is not enough buffer space to add
+				 * any real-time information. Consequently, tz_log can only copy the
+				 * initial buffer into user space.
+				 */
 				len += _copy_to_dispbuf_v2(log, log_start, round, remain, disp,
 					index);
-				pr_warn("Read an incomplete log.\n");
+				pr_warn("Read an incomplete log and copy to disp. len = %u\n", len);
 			}
 			break;
 		}
@@ -1123,6 +1207,7 @@ static uint32_t _copy_to_dispbuf_with_realtime_v2(struct tzdbg_log_v2_t *log,
 				timestamp, sizeof(timestamp), &next);
 		if (stamp_len != -EINVAL) {
 			if (stamp_len <= (remain - each_log_len)) {
+				/* copy the ticks and timestamp into disp buffer. */
 				index += _copy_to_dispbuf_v2(log, log_start, round, next, disp,
 					index);
 				copy_len -= next;
@@ -1130,7 +1215,9 @@ static uint32_t _copy_to_dispbuf_with_realtime_v2(struct tzdbg_log_v2_t *log,
 				memcpy(disp + index, timestamp, stamp_len);
 				index += (uint32_t)stamp_len;
 				len += (uint32_t)stamp_len;
-			} else if (len != 0) {
+			} else {
+				pr_debug("Insufficient buffer for the log with real-time!Remain size is %u, expected size is %u\n",
+					remain, each_log_len + stamp_len);
 				/*
 				 * There are two main reasons for the insufficient buffer. One is
 				 * that there is already some log data in it when the length is not
@@ -1139,14 +1226,22 @@ static uint32_t _copy_to_dispbuf_with_realtime_v2(struct tzdbg_log_v2_t *log,
 				 * the next round of reading from user space. For the latter reason,
 				 * the initial log data will be copied to user space.
 				 */
-				break;
+				if (len != 0)
+					break;
 			}
 		}
 
+		/*
+		 * 1. Update the information about disp, including the starting index, the length
+		 *    that has been copied and remainning length.
+		 * 2. Update the next data reading index of log.
+		 */
 		index += _copy_to_dispbuf_v2(log, log_start, round, copy_len, disp, index);
 		len += copy_len;
-
+		remain = max_len - len;
 		begin = (begin + each_log_len) % round;
+		pr_debug("log len = %d, timestamp len = %d, total copy len = %u, disp buf index = %u, remain = %u, tzdbg_log begin = %u.\n",
+			each_log_len, stamp_len, len, index, remain, begin);
 	}
 
 	return len;

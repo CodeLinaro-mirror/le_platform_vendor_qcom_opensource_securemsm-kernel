@@ -5,9 +5,12 @@ TMECOM_PATH = "tmecom"
 HDCP_PATH = "hdcp"
 QCEDEV_PATH = "crypto-qti"
 QRNG_PATH = "qrng"
-SI_CORE_TEST_PATH = "si_core_tests"
 SMMU_PROXY_PATH = "smmu-proxy"
 QCEDEV_FE_PATH="qcedev_fe"
+SI_CORE_TEST_PATH = "securemsm_tests/si_core_tests"
+SECCAM_PATH = "securemsm_tests/seccam_test_driver"
+HDCP_TEST_PATH="securemsm_tests/hdcp2p2_test"
+TORNADO_MOD_PATH="securemsm_tests/tornado_mod"
 QSEECOM_ENABLED=False
 
 # This dictionary holds all the securemsm-kernel  modules included by calling register_securemsm_module
@@ -174,13 +177,6 @@ register_securemsm_module(
 )
 
 register_securemsm_module(
-    name = "si_core_test",
-    path = SI_CORE_TEST_PATH,
-    default_srcs = ["si_core_test.c"],
-)
-
-
-register_securemsm_module(
     name = "qrng_dlkm",
     path = QRNG_PATH,
     default_srcs = ["msm_rng.c"],
@@ -221,3 +217,43 @@ register_securemsm_module(
                 "qcedev_smmu.c"],
     deps = [":qcedev_fe_local_headers"],
 )
+
+# ------------------------------------ SECUREMSM TEST MODULE DEFINITIONS ---------------------------------
+register_securemsm_module(
+    name = "si_core_test",
+    path = SI_CORE_TEST_PATH,
+    default_srcs = ["si_core_test.c"],
+)
+
+register_securemsm_module(
+    name = "hdcp2p2_test",
+    path = HDCP_TEST_PATH,
+    default_srcs = [
+                "hdcp2p2_test.c",
+                "hdcp2p2_test.h",],
+    deps = [":smcinvoke_kernel_headers", ":hdcp_qseecom_dlkm", "%b_smcinvoke_dlkm", "%b_hdcp_qseecom_dlkm"],
+    srcs = ["config/sec-kernel_defconfig.h"],
+    copts = [
+        "-include",
+        "config/sec-kernel_defconfig.h",
+    ],
+)
+
+register_securemsm_module(
+    name = "tornado_mod",
+    path = TORNADO_MOD_PATH,
+    srcs = [
+                "tornado_mod.c",
+                "tornado_mod.h",],
+)
+
+register_securemsm_module(
+    name = "seccam_test_driver",
+    path = SECCAM_PATH,
+    srcs = [
+                "seccam_test_driver.c",
+                "scm_wrapper.h",
+                "seccam_test_driver.h",],
+    deps = [":smcinvoke_kernel_headers", ":%b_smcinvoke_dlkm", ":smmu_proxy_headers", "%b_smmu_proxy_dlkm"],
+)
+
