@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0-only
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "smcinvoke: %s: " fmt, __func__
@@ -1064,7 +1064,7 @@ static int cbo_dispatch(unsigned int context_id,
 	 * failed, then transaction has already been PROCESSED.
 	 */
 
-	errno = set_txn_state(cb_txn, XST_TIMEDOUT) ? cb_txn->errno : -EINVAL;
+	errno = set_txn_state(cb_txn, XST_TIMEDOUT) ? cb_txn->errno : -ERESTARTSYS;
 	pr_debug("%s invocation returned with %d (context_id %u).\n",
 		si_object_name(object), errno, context_id);
 	if (!errno)
