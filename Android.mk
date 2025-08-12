@@ -81,6 +81,7 @@ ifeq ($(TARGET_BOARD_PLATFORM), gen5)
     ENABLE_QCRYPTO_DLKM := false
     ENABLE_HDCP_QSEECOM_DLKM := false
     ENABLE_QSEECOM_DLKM := false
+    ENABLE_SMCINVOKE_DLKM := true
   endif
 endif
 

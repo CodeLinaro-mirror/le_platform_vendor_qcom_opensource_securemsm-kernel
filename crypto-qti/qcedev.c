@@ -3,7 +3,7 @@
  * QTI CE device driver.
  *
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/mman.h>
@@ -563,6 +563,8 @@ void qcedev_offload_cipher_req_err_cb(void *cookie, struct qce_error *qce_err)
 	if (!podev)
 		return;
 	qcedev_areq = podev->active_command;
+	if (!qcedev_areq)
+		return;
 
 	qcedev_areq_set_qce_error(qcedev_areq, qce_err);
 	qcedev_areq->failed = true;
@@ -2841,8 +2843,11 @@ exit_mem_new_client:
 	podev->mem_client = NULL;
 
 exit_qce_close:
-	if (handle)
+	if (handle) {
 		qce_close(handle);
+		handle = NULL;
+		podev->qce = NULL;
+	}
 exit_scale_busbandwidth:
 	icc_set_bw(podev->icc_path, 0, 0);
 exit_unregister_bus_scale:
@@ -2860,7 +2865,6 @@ exit_unreg_chrdev_region:
 	podev->icc_path = NULL;
 	platform_set_drvdata(pdev, NULL);
 	podev->pdev = NULL;
-	podev->qce = NULL;
 
 	return rc;
 }

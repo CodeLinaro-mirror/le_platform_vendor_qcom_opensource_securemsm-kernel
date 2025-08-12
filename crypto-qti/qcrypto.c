@@ -3,7 +3,7 @@
  * QTI Crypto driver
  *
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/module.h>
@@ -1342,7 +1342,12 @@ static void _qcrypto_remove_engine(struct crypto_engine *pengine)
 
 	cancel_work_sync(&pengine->bw_reaper_ws);
 	cancel_work_sync(&pengine->bw_allocate_ws);
+
+	#if (KERNEL_VERSION(6, 15, 0) > LINUX_VERSION_CODE)
 	del_timer_sync(&pengine->bw_reaper_timer);
+	#else
+	timer_delete_sync(&pengine->bw_reaper_timer);
+	#endif
 
 	if (pengine->icc_path)
 		icc_put(pengine->icc_path);
@@ -5314,7 +5319,11 @@ static int _qcrypto_engine_in_use(struct crypto_engine *pengine)
 
 static void _qcrypto_do_suspending(struct crypto_engine *pengine)
 {
+	#if (KERNEL_VERSION(6, 15, 0) > LINUX_VERSION_CODE)
 	del_timer_sync(&pengine->bw_reaper_timer);
+	#else
+	timer_delete_sync(&pengine->bw_reaper_timer);
+	#endif
 	qcrypto_ce_set_bus(pengine, false);
 }
 

@@ -193,25 +193,31 @@ static int qce_fe_create_hab_channel(void *pv)
 {
 	int ret = 0;
 	int i = 0;
-
-	while (!kthread_should_stop()) {
-		drv_handles = kzalloc(sizeof(struct qce_fe_drv_hab_handles), GFP_KERNEL);
-		if (drv_handles == NULL)
-			return -ENOMEM;
-		spin_lock_init(&(drv_handles->handle_lock));
-		/* open hab handles which will be used for communication with QCE backend */
-		for (i = 0 ; i < HAB_HANDLE_NUM; i++) {
-			ret = qce_fe_hab_open(&(drv_handles->qce_fe_hab_handles[i].handle));
-			if (ret != 0)
-				return ret;
-			drv_handles->qce_fe_hab_handles[i].in_use = false;
-			if (i == 0)
-				drv_handles->initialized = true;
-		}
-		complete(&create_hab_channel_done);
-		pr_info("%s: Create hab channel succeeded\n", __func__);
-		break;
+	drv_handles = kzalloc(sizeof(struct qce_fe_drv_hab_handles), GFP_KERNEL);
+	if (drv_handles == NULL) {
+		ret = -ENOMEM;
+		goto wait_for_thread_stop;
 	}
+	spin_lock_init(&(drv_handles->handle_lock));
+
+	/* open hab handles which will be used for communication with QCE backend */
+	for (i = 0; i < HAB_HANDLE_NUM; i++) {
+		ret = qce_fe_hab_open(&(drv_handles->qce_fe_hab_handles[i].handle));
+		if (ret != 0) {
+			pr_info("%s: qce_fe_hab_open failed , ret = %d\n", __func__, ret);
+			goto wait_for_thread_stop;
+		}
+		drv_handles->qce_fe_hab_handles[i].in_use = false;
+		if (i == 0)
+			drv_handles->initialized = true;
+	}
+	pr_info("%s:create hab channels succeeded\n", __func__);
+
+wait_for_thread_stop:
+	complete(&create_hab_channel_done);
+	while (!kthread_should_stop())
+		schedule();
+
 	return ret;
 }
 
@@ -238,7 +244,7 @@ static void qce_fe_destroy_hab_channel(void)
 		return;
 	spin_lock(&(drv_handles->handle_lock));
 	/* open hab handles which will be used for communication with QCE backend */
-	for (i = 0 ; i < HAB_HANDLE_NUM; i++)
+	for (i = 0; i < HAB_HANDLE_NUM; i++)
 		qce_fe_hab_close(drv_handles->qce_fe_hab_handles[i].handle);
 	spin_unlock(&(drv_handles->handle_lock));
 	pr_info("%s: Close hab channel succeeded\n", __func__);
@@ -290,21 +296,25 @@ static int __init qce_fe_init(void)
 		ret = -EFAULT;
 		goto device_destroy_error;
 	}
-	if (wait_for_completion_interruptible_timeout(
-		&create_hab_channel_done, msecs_to_jiffies(HAB_OPEN_WAIT_TIMEOUT_MS)) <= 0) {
+	wait_for_completion_interruptible_timeout(
+		&create_hab_channel_done, msecs_to_jiffies(HAB_OPEN_WAIT_TIMEOUT_MS));
+
+	/*Stop the create_channel_kthread_task and collect the results */
+	ret = kthread_stop(create_channel_kthread_task);
+	if (ret < 0) {
 		pr_err("%s: timeout hit\n", __func__);
 		if ((drv_handles != NULL) && (drv_handles->initialized)) {
 			pr_info("%s:create hab channels partially succeeded\t"
 					"performance might be affected\n", __func__);
-			kthread_stop(create_channel_kthread_task);
 			return 0;
 		}
 		pr_err("%s:create hab channels failed, unloading qce_fe\n", __func__);
-		kthread_stop(create_channel_kthread_task);
 		/*termporarily don't set ret value */
 		//ret = -ETIME;
 		ret = 0;
 		goto device_destroy_error;
+	} else {
+		pr_info("%s:create hab channels succeeded\n", __func__);
 	}
 	return 0;
 device_destroy_error:

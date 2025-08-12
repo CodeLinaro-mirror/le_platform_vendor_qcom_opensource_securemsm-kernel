@@ -1964,10 +1964,12 @@ static ssize_t tzdbg_fs_read(struct file *file, char __user *buf,
 	ssize_t len = 0;
 	struct clients_info_t *clients_info = NULL;
 
+	mutex_lock(&tzdbg_mutex);
 	list_for_each_entry(clients_info, &clients_list, list) {
 		if (clients_info->file == file)
 			break;
 	}
+	mutex_unlock(&tzdbg_mutex);
 	if (!clients_info)
 		return -ENODATA;
 
@@ -1991,6 +1993,7 @@ static ssize_t tzdbg_fs_read(struct file *file, char __user *buf,
 static int tzdbg_procfs_open(struct inode *inode, struct file *file)
 {
 	struct clients_info_t *clients_info = NULL;
+	int ret = 0;
 
 	clients_info = kzalloc(sizeof(*clients_info), GFP_KERNEL);
 	if (!clients_info)
@@ -2002,26 +2005,33 @@ static int tzdbg_procfs_open(struct inode *inode, struct file *file)
 	mutex_unlock(&tzdbg_mutex);
 
 #if (LINUX_VERSION_CODE <= KERNEL_VERSION(6,0,0))
-	return single_open(file, NULL, PDE_DATA(inode));
+	ret = single_open(file, NULL, PDE_DATA(inode));
 #else
-	return single_open(file, NULL, pde_data(inode));
+	ret = single_open(file, NULL, pde_data(inode));
 #endif
+	if (ret) {
+		mutex_lock(&tzdbg_mutex);
+		list_del(&clients_info->list);
+		mutex_unlock(&tzdbg_mutex);
+		kfree(clients_info);
+	}
+
+	return ret;
 }
 
 static int tzdbg_procfs_release(struct inode *inode, struct file *file)
 {
 	struct clients_info_t *clients_info = NULL;
 
+	mutex_lock(&tzdbg_mutex);
 	list_for_each_entry(clients_info, &clients_list, list) {
-		if (clients_info->file == file)
+		if (clients_info->file == file) {
+			list_del(&clients_info->list);
+			kfree(clients_info);
 			break;
+		}
 	}
-	if (clients_info) {
-		mutex_lock(&tzdbg_mutex);
-		list_del(&clients_info->list);
-		mutex_unlock(&tzdbg_mutex);
-		kfree(clients_info);
-	}
+	mutex_unlock(&tzdbg_mutex);
 
 	return single_release(inode, file);
 }
@@ -2049,10 +2059,13 @@ static __poll_t tzdbg_procfs_poll(struct file *file, struct poll_table_struct *w
 		(tzdbg.is_encrypted_log_enabled || tzdbg.tz_qsee_plain_log_enabled)))
 		return POLLERR;
 
+	mutex_lock(&tzdbg_mutex);
 	list_for_each_entry(clients_info, &clients_list, list) {
 		if (clients_info->file == file)
 			break;
 	}
+	mutex_unlock(&tzdbg_mutex);
+
 	if (is_log_ready(tz_id, clients_info)) {
 		pr_debug("Setting polling flag true, tzid: %d!\n", tz_id);
 		return EPOLLIN | EPOLLRDNORM;

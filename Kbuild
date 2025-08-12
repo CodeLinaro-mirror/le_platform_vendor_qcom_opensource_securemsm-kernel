@@ -83,15 +83,20 @@ ifeq ($(CONFIG_QTI_QUIN_GVM), y)
     qcedev_fe_dlkm-objs := qcedev_fe/qcedev_fe.o qcedev_fe/qcedev_smmu.o
 endif #CONFIG_QTI_QUIN_GVM
 
-obj-$(CONFIG_QCOM_SI_CORE_TEST) += si_core_test.o
-si_core_test-objs := securemsm_tests/si_core_tests/si_core_test.o
 
-obj-m += tornado_mod.o
-tornado_mod-objs := securemsm_tests/tornado_mod/tornado_mod.o
+# Enable test modules only for LA builds
+ifneq ($(CONFIG_DISABLE_TEST_MODULES), y)
 
-KBUILD_CPPFLAGS += -DCONFIG_HDCP_QSEECOM
-obj-m += hdcp2p2_test.o
-hdcp2p2_test-objs := securemsm_tests/hdcp2p2_test/hdcp2p2_test.o
+    obj-$(CONFIG_QCOM_SI_CORE_TEST) += si_core_test.o
+    si_core_test-objs := securemsm_tests/si_core_tests/si_core_test.o
 
-obj-m += seccam_test_driver.o
-seccam_test_driver-objs := securemsm_tests/seccam_test_driver/seccam_test_driver.o
+    obj-m += tornado_mod.o
+    tornado_mod-objs := securemsm_tests/tornado_mod/tornado_mod.o
+
+    KBUILD_CPPFLAGS += -DCONFIG_HDCP_QSEECOM
+    obj-m += hdcp2p2_test.o
+    hdcp2p2_test-objs := securemsm_tests/hdcp2p2_test/hdcp2p2_test.o
+
+    obj-m += seccam_test_driver.o
+    seccam_test_driver-objs := securemsm_tests/seccam_test_driver/seccam_test_driver.o
+endif
