@@ -40,16 +40,13 @@ ifeq ($(TARGET_USES_GY), true)
   ENABLE_QSEECOM_DLKM := false
 endif #TARGET_USES_GY
 
-#enable QCEDEV_FE driver only on Automotive Lemans HQX LA GVM.
+#enable QCEDEV_FE driver only on Automotive Lemans HQX/HGY LA GVM.
 ifeq ($(ENABLE_HYP),true)
-  ifeq ($(TARGET_BOARD_PLATFORM),gen4)
-    ifneq ($(TARGET_USES_GY), true)
-      ifneq ($(filter $(PLATFORM_VERSION), 16 Baklava),$(PLATFORM_VERSION))
-        ENABLE_QCEDEV_FE := true
-      endif
-    endif #TARGET_USES_GY
+  ifneq ($(filter $(TARGET_BOARD_PLATFORM),gen4 gen5),)
+    ENABLE_QCEDEV_FE := true
   endif #TARGET_BOARD_PLATFORM
 endif #ENABLE_HYP
+
 
 ifeq ($(ENABLE_QCRYPTO_DLKM), true)
 BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/qcedev-mod_dlkm.ko \
@@ -103,7 +100,4 @@ endif #ENABLE_QSEECOM_DLKM
 
 ifeq ($(ENABLE_QCEDEV_FE), true)
 BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/qcedev_fe_dlkm.ko
-BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/qcedev_fe_dlkm.ko
-BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD += $(KERNEL_MODULES_OUT)/qcedev_fe_dlkm.ko
-BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD += $(KERNEL_MODULES_OUT)/qcedev_fe_dlkm.ko
 endif #ENABLE_QCEDEV_FE
