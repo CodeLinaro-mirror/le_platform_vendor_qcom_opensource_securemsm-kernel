@@ -13,7 +13,10 @@ def define_sun():
             "qrng_dlkm",
             "qcrypto-msm_dlkm",
             "smmu_proxy_dlkm",
-            "si_core_test"
+	    "seccam_test_driver",
+	    "hdcp2p2_test",
+	    "si_core_test",
+	    "tornado_mod",
          ],
          extra_options = [
              "CONFIG_QCOM_SI_CORE_TEST",
