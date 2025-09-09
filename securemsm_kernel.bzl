@@ -93,7 +93,7 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
             ],
             "//build/qcom_build_extensions:qtisocrepo_false": [],
         })
-    if target == "sun" or target == "canoe" or target == "vienna" or target == "parrot":
+    if target == "sun" or target == "canoe" or target == "art" or target == "vienna" or target == "parrot":
         deps += select({
             "//build/qcom_build_extensions:qtisocrepo_true": [
                 "//soc-repo:{}/drivers/misc/qseecom_proxy".format(kernel_build_variant),
