@@ -8,7 +8,8 @@ load(
     "securemsm_modules",
     "securemsm_modules_by_config",
 )
-load("//build/bazel_common_rules/dist:dist.bzl", "copy_to_dist_dir")
+load("@rules_pkg//pkg:install.bzl", "pkg_install")
+load("@rules_pkg//pkg:mappings.bzl", "pkg_files", "strip_prefix")
 
 def _replace_formatting_codes(target, variant, s):
     kernel_build = "{}_{}".format(target, variant)
@@ -130,15 +131,17 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
         )
         module_rules.append(rule_name)
 
-    copy_to_dist_dir(
+    pkg_files(
+        name = kernel_build_variant + "_dist_files",
+        srcs = module_rules,
+        visibility = ["//visibility:private"],
+        strip_prefix = strip_prefix.files_only(),
+    )
+
+    pkg_install(
         name = "{}_securemsm-kernel_dist".format(kernel_build_variant),
-        data = module_rules,
-        dist_dir = "out/target/product/{}/dlkm/lib/modules/".format(target),
-        flat = True,
-        wipe_dist_dir = False,
-        allow_duplicate_filenames = False,
-        mode_overrides = {"**/*": "644"},
-        log = "info",
+        srcs = [":{}_dist_files".format(kernel_build_variant)],
+        destdir = "out/target/product/{}/dlkm/lib/modules/".format(target),
     )
 
     kernel_modules_install(
