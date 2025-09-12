@@ -111,3 +111,11 @@ ifneq ($(CONFIG_DISABLE_TEST_MODULES), y)
     obj-m += seccam_test_driver.o
     seccam_test_driver-objs := securemsm_tests/seccam_test_driver/seccam_test_driver.o
 endif
+
+ifneq ($(CONFIG_ARCH_QTI_VM), y)
+    include $(SSG_MODULE_ROOT)/config/sec-kernel_defconfig_hibernate_tzdata_mgr.conf
+    LINUXINCLUDE += -include $(SSG_MODULE_ROOT)/config/sec-kernel_defconfig_hibernate_tzdata_mgr.h
+
+    obj-$(CONFIG_HIBERNATE_TZDATA_MGR) += hibernate_tzdata_mgr_dlkm.o
+    hibernate_tzdata_mgr_dlkm-objs := hibernate_tzdata_mgr/hibernate_tzdata_mgr.o
+endif

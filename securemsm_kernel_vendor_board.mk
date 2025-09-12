@@ -81,6 +81,10 @@ ifeq ($(TARGET_BOARD_PLATFORM), gen5)
   endif
 endif
 
+# Enable Hibernate kernel module
+ifeq ($(filter $(TARGET_BOARD_PLATFORM), seraph vienna),$(TARGET_BOARD_PLATFORM))
+  ENABLE_HIBERNATE_TZDATA_MGR_DLKM := true
+endif
 
 ifeq ($(ENABLE_QCRYPTO_DLKM), true)
 BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/qcedev-mod_dlkm.ko \
@@ -136,3 +140,10 @@ endif #ENABLE_QSEECOM_DLKM
 ifeq ($(ENABLE_QCEDEV_FE), true)
 BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/qcedev_fe_dlkm.ko
 endif #ENABLE_QCEDEV_FE
+
+ifeq ($(ENABLE_HIBERNATE_TZDATA_MGR_DLKM), true)
+BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/hibernate_tzdata_mgr_dlkm.ko
+BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/hibernate_tzdata_mgr_dlkm.ko
+BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD += $(KERNEL_MODULES_OUT)/hibernate_tzdata_mgr_dlkm.ko
+endif #ENABLE_HIBERNATE_TZDATA_MGR_DLKM
+

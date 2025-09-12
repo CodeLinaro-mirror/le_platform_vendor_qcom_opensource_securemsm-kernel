@@ -11,6 +11,7 @@ SI_CORE_TEST_PATH = "securemsm_tests/si_core_tests"
 SECCAM_PATH = "securemsm_tests/seccam_test_driver"
 HDCP_TEST_PATH="securemsm_tests/hdcp2p2_test"
 TORNADO_MOD_PATH="securemsm_tests/tornado_mod"
+HIBERNATE_TZDATA_MGR_PATH = "hibernate_tzdata_mgr"
 QSEECOM_ENABLED=False
 
 # This dictionary holds all the securemsm-kernel  modules included by calling register_securemsm_module
@@ -266,3 +267,11 @@ register_securemsm_module(
     deps = [":smcinvoke_kernel_headers", ":%b_smcinvoke_dlkm", ":smmu_proxy_headers", "%b_smmu_proxy_dlkm"],
 )
 
+register_securemsm_module(
+    name = "hibernate_tzdata_mgr_dlkm",
+    path = HIBERNATE_TZDATA_MGR_PATH,
+    default_srcs = [
+        "hibernate_tzdata_mgr.c",
+    ],
+    deps = [":hibernate_tzdata_mgr_headers", "%b_smcinvoke_dlkm"],
+)
