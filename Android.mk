@@ -3,6 +3,11 @@
 ENABLE_SECUREMSM_DLKM := true
 ENABLE_SECUREMSM_QTEE_DLKM := true
 ENABLE_QCEDEV_FE := false
+ENABLE_SST_INVOKE_TEST := false
+ENABLE_HDCP_TEST := false
+ENABLE_SECCAM_TEST := false
+ENABLE_SI_CORE_TEST := false
+
 
 ifeq ($(TARGET_KERNEL_DLKM_DISABLE), true)
   ifeq ($(TARGET_KERNEL_DLKM_SECURE_MSM_OVERRIDE),false)
@@ -48,6 +53,39 @@ ifeq ($(ENABLE_HYP),true)
   endif #TARGET_BOARD_PLATFORM
 endif #ENABLE_HYP
 
+# TEST Drivers (si_core_test, seccam_driver, hdcp_test, tornado_mod)
+ifneq ($(TARGET_USES_QMAA), true)
+    ENABLE_SST_INVOKE_TEST := true
+    ENABLE_HDCP_TEST := true
+    ifeq ($(CONFIG_SI_CORE_TEST), y)
+        ENABLE_SI_CORE_TEST := true
+    else
+        ENABLE_SI_CORE_TEST := false
+    endif
+    ifneq ($(call is-board-platform-in-list, kalama64 blair kalama),true)
+        ENABLE_SECCAM_TEST := true
+    endif
+endif
+
+ifeq ($(TARGET_USES_QMAA_OVERRIDE_SST_CLIENTS), true)
+    ENABLE_SST_INVOKE_TEST := true
+endif
+ifeq ($(TARGET_KERNEL_DLKM_SECURE_MSM_OVERRIDE), true)
+    ENABLE_HDCP_TEST := true
+    ENABLE_SECCAM_TEST := true
+    ENABLE_SI_CORE_TEST := true
+endif
+ifeq ($(ENABLE_HDCP_DP), true)
+    ENABLE_HDCP_TEST := true
+endif
+
+# Disabling test drivers for GY targets
+ifeq ($(TARGET_BOARD_AUTO), true)
+  ENABLE_HDCP_TEST := false
+  ENABLE_SECCAM_TEST := false
+  ENABLE_SI_CORE_TEST := false
+  ENABLE_SST_INVOKE_TEST := false
+endif #TARGET_BOARD_AUTO
 
 LOCAL_PATH := $(call my-dir)
 
@@ -65,7 +103,8 @@ SSG_SRC_FILES := \
 	$(wildcard $(LOCAL_PATH)/*) \
  	$(wildcard $(LOCAL_PATH)/*/*) \
  	$(wildcard $(LOCAL_PATH)/*/*/*) \
- 	$(wildcard $(LOCAL_PATH)/*/*/*/*)
+ 	$(wildcard $(LOCAL_PATH)/*/*/*/*) \
+	$(wildcard $(LOCAL_PATH)/*/*/*/*/*)
 LOCAL_MODULE_DDK_BUILD := true
 # This is set once per LOCAL_PATH, not per (kernel) module
 KBUILD_OPTIONS := SSG_ROOT=$(SEC_KERNEL_DIR)
@@ -120,19 +159,6 @@ include $(DLKM_DIR)/Build_external_kernelmodule.mk
 endif #ENABLE_QSEECOM_DLKM
 ###################################################
 ###################################################
-ifeq ($(ENABLE_SI_CORE_TEST), true)
-include $(CLEAR_VARS)
-LOCAL_SRC_FILES           := $(SSG_SRC_FILES)
-LOCAL_MODULE              := si_core_test.ko
-LOCAL_MODULE_KBUILD_NAME  := si_core_test.ko
-LOCAL_MODULE_TAGS         := optional
-LOCAL_MODULE_DEBUG_ENABLE := true
-LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
-include $(DLKM_DIR)/Build_external_kernelmodule.mk
-endif #ENABLE_SI_CORE_TEST
-###################################################
-###################################################
-
 ifeq ($(ENABLE_QCRYPTO_DLKM), true)
 include $(CLEAR_VARS)
 LOCAL_SRC_FILES           := $(SSG_SRC_FILES)
@@ -213,3 +239,53 @@ LOCAL_MODULE_DEBUG_ENABLE := true
 LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
 include $(DLKM_DIR)/Build_external_kernelmodule.mk
 endif #ENABLE_QCEDEV_FE
+
+###################################################
+#       SECUREMSM_TEST Modules                    #
+###################################################
+ifeq ($(ENABLE_SECCAM_TEST), true)
+include $(CLEAR_VARS)
+LOCAL_SRC_FILES           := $(SSG_SRC_FILES)
+LOCAL_MODULE              := seccam_test_driver.ko
+LOCAL_MODULE_KBUILD_NAME  := seccam_test_driver.ko
+LOCAL_MODULE_TAGS         := optional
+LOCAL_MODULE_DEBUG_ENABLE := true
+LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
+include $(DLKM_DIR)/Build_external_kernelmodule.mk
+endif #ENABLE_SECCAM_TEST
+###################################################
+###################################################
+ifeq ($(ENABLE_SST_INVOKE_TEST), true)
+include $(CLEAR_VARS)
+LOCAL_SRC_FILES           := $(SSG_SRC_FILES)
+LOCAL_MODULE              := tornado_mod.ko
+LOCAL_MODULE_KBUILD_NAME  := tornado_mod.ko
+LOCAL_MODULE_TAGS         := optional
+LOCAL_MODULE_DEBUG_ENABLE := true
+LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
+include $(DLKM_DIR)/Build_external_kernelmodule.mk
+endif #ENABLE_SST_INVOKE_TEST
+###################################################
+###################################################
+ifeq ($(ENABLE_HDCP_TEST), true)
+include $(CLEAR_VARS)
+LOCAL_SRC_FILES           := $(SSG_SRC_FILES)
+LOCAL_MODULE              := hdcp2p2_test.ko
+LOCAL_MODULE_KBUILD_NAME  := hdcp2p2_test.ko
+LOCAL_MODULE_TAGS         := optional
+LOCAL_MODULE_DEBUG_ENABLE := true
+LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
+include $(DLKM_DIR)/Build_external_kernelmodule.mk
+endif #ENABLE_HDCP_TEST
+###################################################
+###################################################
+ifeq ($(ENABLE_SI_CORE_TEST), true)
+include $(CLEAR_VARS)
+LOCAL_SRC_FILES           := $(SSG_SRC_FILES)
+LOCAL_MODULE              := si_core_test.ko
+LOCAL_MODULE_KBUILD_NAME  := si_core_test.ko
+LOCAL_MODULE_TAGS         := optional
+LOCAL_MODULE_DEBUG_ENABLE := true
+LOCAL_MODULE_PATH         := $(KERNEL_MODULES_OUT)
+include $(DLKM_DIR)/Build_external_kernelmodule.mk
+endif #ENABLE_SI_CORE_TEST

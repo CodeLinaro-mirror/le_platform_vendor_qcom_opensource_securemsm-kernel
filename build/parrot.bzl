@@ -12,7 +12,10 @@ def define_parrot():
             "qrng_dlkm",
             "qcrypto-msm_dlkm",
             "qseecom_dlkm",
-            "smmu_proxy_dlkm"
+            "smmu_proxy_dlkm",
+            "seccam_test_driver",
+            "hdcp2p2_test",
+            "tornado_mod",
         ],
         extra_options = [
             "CONFIG_QCOM_SMCINVOKE",
