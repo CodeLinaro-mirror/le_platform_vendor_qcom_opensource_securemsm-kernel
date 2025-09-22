@@ -57,6 +57,7 @@ ifeq ($(TARGET_BOARD_PLATFORM), gen4)
       ENABLE_QCRYPTO_DLKM := false
       ENABLE_HDCP_QSEECOM_DLKM := false
       ENABLE_QSEECOM_DLKM := false
+      ENABLE_QCEDEV_FE := true
     endif
   endif
 endif
@@ -82,6 +83,7 @@ ifeq ($(TARGET_BOARD_PLATFORM), gen5)
     ENABLE_HDCP_QSEECOM_DLKM := false
     ENABLE_QSEECOM_DLKM := false
     ENABLE_SMCINVOKE_DLKM := true
+    ENABLE_QCEDEV_FE := true
   endif
 endif
 
