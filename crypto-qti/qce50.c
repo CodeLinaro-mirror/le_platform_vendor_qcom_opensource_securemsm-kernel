@@ -4454,7 +4454,7 @@ static int qce_core_irq_init(struct qce_device *pce_dev)
 		pr_err("Could not request irq: %d\n", ret);
 		return ret;
 	}
-	enable_irq(pce_dev->core_irq);
+
 	return ret;
 }
 
