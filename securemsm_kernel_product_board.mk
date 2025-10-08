@@ -80,6 +80,14 @@ ifeq ($(TARGET_BOARD_AUTO), true)
   ENABLE_SST_INVOKE_TEST := false
 endif #TARGET_BOARD_AUTO
 
+# Disabling test drivers for LW targets
+ifeq ($(TARGET_SUPPORTS_WEAR_OS), true)
+  ENABLE_HDCP_TEST := false
+  ENABLE_SECCAM_TEST := false
+  ENABLE_SI_CORE_TEST := false
+  ENABLE_SST_INVOKE_TEST := false
+endif #TARGET_SUPPORTS_WEAR_OS
+
 ifeq ($(ENABLE_QCRYPTO_DLKM), true)
 PRODUCT_PACKAGES += qcedev-mod_dlkm.ko
 PRODUCT_PACKAGES += qce50_dlkm.ko
