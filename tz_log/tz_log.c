@@ -1787,6 +1787,8 @@ static ssize_t tzdbg_fs_read_unencrypted(struct clients_info_t *clients_info, in
 	}
 
 	if (tz_id == TZDBG_HYP_GENERAL || tz_id == TZDBG_HYP_LOG) {
+		if (tzdbg.hyp_debug_rw_buf_size == 0)
+			return 0;
 		mutex_lock(&tzdbg_mutex);
 		memcpy_fromio((void *)tzdbg.hyp_diag_buf,
 				tzdbg.hyp_virt_iobase,
@@ -2317,6 +2319,13 @@ static int __update_hypdbg_base(struct platform_device *pdev,
 	hypdiag_phy_iobase = readl_relaxed(virt_iobase + hyp_address_offset);
 	tzdbg.hyp_debug_rw_buf_size = readl_relaxed(virt_iobase +
 					hyp_size_offset);
+
+	if (tzdbg.hyp_debug_rw_buf_size == 0) {
+		pr_info("Size is 0, hyp logs are not available!\n");
+		tzdbg.hyp_virt_iobase = NULL;
+		tzdbg.hyp_diag_buf = NULL;
+		return 0;
+	}
 
 	tzdbg.hyp_virt_iobase = devm_ioremap(&pdev->dev,
 					hypdiag_phy_iobase,
