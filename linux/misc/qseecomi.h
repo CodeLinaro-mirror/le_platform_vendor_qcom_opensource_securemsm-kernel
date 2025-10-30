@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2013-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __QSEECOMI_H_
@@ -11,6 +11,11 @@
 #include "../../include/uapi/linux/qseecom.h"
 
 #define QSEECOM_KEY_ID_SIZE   32
+#define TEEC_UUID_LEN         16
+#define TEEC_PARAM_MAX         4
+#define TEEC_PARAM_SIZE       16
+#define TEEC_LOGIN_USER        1
+#define TEEC_LOGIN_GROUP       2
 
 #define QSEOS_RESULT_FAIL_SEND_CMD_NO_THREAD  -19   /*0xFFFFFFED*/
 #define QSEOS_RESULT_FAIL_UNSUPPORTED_CE_PIPE -63
@@ -300,6 +305,14 @@ struct qseecom_key_max_count_query_ireq {
 
 struct qseecom_key_max_count_query_irsp {
 	uint32_t max_key_count;
+} __packed;
+
+struct QTEEC_open_session_req {
+	uint8_t uuid[TEEC_UUID_LEN];
+	uint32_t connection_method;
+	uint32_t connection_data;
+	uint32_t param_types;
+	uint8_t params[TEEC_PARAM_MAX * TEEC_PARAM_SIZE];
 } __packed;
 
 struct qseecom_qteec_ireq {

@@ -7459,6 +7459,27 @@ err:
 	return -ENOMEM;
 }
 
+static int __qseecom_calculate_qteec_client_creds(struct qseecom_qteec_req *req)
+{
+	struct QTEEC_open_session_req *qteec_req;
+	kgid_t grp;
+
+	if (!req || !req->req_ptr ||
+		req->req_len < sizeof(struct QTEEC_open_session_req))
+		return -EINVAL;
+
+	qteec_req = (struct QTEEC_open_session_req *)req->req_ptr;
+
+	if (qteec_req->connection_method == TEEC_LOGIN_USER)
+		qteec_req->connection_data = (uint32_t)__kuid_val(current_euid());
+	else if (qteec_req->connection_method == TEEC_LOGIN_GROUP) {
+		grp = make_kgid(current_user_ns(), qteec_req->connection_data);
+		if (!gid_valid(grp) || !in_egroup_p(grp))
+			return -EPERM;
+	}
+	return 0;
+}
+
 static int __qseecom_qteec_issue_cmd(struct qseecom_dev_handle *data,
 				struct qseecom_qteec_req *req, uint32_t cmd_id)
 {
@@ -7516,6 +7537,12 @@ static int __qseecom_qteec_issue_cmd(struct qseecom_dev_handle *data,
 			(cmd_id == QSEOS_TEE_REQUEST_CANCELLATION)) {
 		ret = __qseecom_update_qteec_req_buf(
 			(struct qseecom_qteec_modfd_req *)req, data, false);
+		if (ret)
+			return ret;
+	}
+
+	if (cmd_id == QSEOS_TEE_OPEN_SESSION) {
+		ret = __qseecom_calculate_qteec_client_creds(req);
 		if (ret)
 			return ret;
 	}
