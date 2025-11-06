@@ -3,7 +3,7 @@
  * QTI CE 32-bit compatibility syscall for 64-bit systems
  *
  * Copyright (c) 2014-2020 The Linux Foundation. All rights reserved.
- * Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/kernel.h>
@@ -90,14 +90,14 @@ static int compat_get_qcedev_vbuf_info(
 
 	for (i = 0; i < QCEDEV_MAX_BUFFERS; i++) {
 		err |= get_user(vaddr, &vbuf32->src[i].vaddr);
-		memcpy(&vbuf->src[i].vaddr, &vaddr, sizeof(vaddr));
+		vbuf->src[i].vaddr = compat_ptr(vaddr);
 		err |= get_user(len, &vbuf32->src[i].len);
 		memcpy(&vbuf->src[i].len, &len, sizeof(len));
 	}
 
 	for (i = 0; i < QCEDEV_MAX_BUFFERS; i++) {
 		err |= get_user(vaddr, &vbuf32->dst[i].vaddr);
-		memcpy(&vbuf->dst[i].vaddr, &vaddr, sizeof(vaddr));
+		vbuf->dst[i].vaddr = compat_ptr(vaddr);
 		err |= get_user(len, &vbuf32->dst[i].len);
 		memcpy(&vbuf->dst[i].len, &len, sizeof(len));
 	}
@@ -334,7 +334,7 @@ static int compat_get_qcedev_sha_op_req(
 
 	for (i = 0; i < QCEDEV_MAX_BUFFERS; i++) {
 		err |= get_user(vaddr, &data32->data[i].vaddr);
-		memcpy(&data->data[i].vaddr, &vaddr, sizeof(vaddr));
+		data->data[i].vaddr = compat_ptr(vaddr);
 		err |= get_user(len, &data32->data[i].len);
 		memcpy(&data->data[i].len, &len, sizeof(len));
 	}
@@ -352,7 +352,7 @@ static int compat_get_qcedev_sha_op_req(
 	err |= get_user(diglen, &data32->diglen);
 	memcpy(&data->diglen, &diglen, sizeof(diglen));
 	err |= get_user(authkey, &data32->authkey);
-	memcpy(&data->authkey, &authkey, sizeof(authkey));
+	data->authkey = compat_ptr(authkey);
 	err |= get_user(authklen, &data32->authklen);
 	memcpy(&data->authklen, &authklen, sizeof(authklen));
 	err |= get_user(alg, &data32->alg);

@@ -2161,6 +2161,13 @@ qcedev_check_extended_cipher_params(struct qcedev_extended_cipher_req *req,
 		goto error;
 	}
 
+	if (!(QCEDEV_OFFLOAD_HLOS_HLOS <= req->op && QCEDEV_OFFLOAD_OPER_LAST > req->op)) {
+		pr_err("%s: Invalid op = %d, %d <= op < %d\n", __func__,
+		       req->op, QCEDEV_OFFLOAD_HLOS_HLOS,
+		       QCEDEV_OFFLOAD_OPER_LAST);
+		goto error;
+	}
+
 	if (qcedev_check_offload_key(req, podev))
 		goto error;
 

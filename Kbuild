@@ -35,6 +35,7 @@ obj-$(CONFIG_QCOM_SMCINVOKE) += smcinvoke_dlkm.o
 ifneq ($(CONFIG_QCOM_SI_CORE), y)
     smcinvoke_dlkm-objs := smcinvoke/compat/smcinvoke_kernel.o
     smcinvoke_dlkm-objs += smcinvoke/compat/smcinvoke.o
+    smcinvoke_dlkm-objs += smcinvoke/compat/smci_kernel.o
 else
     smcinvoke_dlkm-objs := smcinvoke/si_core_xts/qseecom.o
     smcinvoke_dlkm-objs += smcinvoke/si_core_xts/smci_kernel.o
