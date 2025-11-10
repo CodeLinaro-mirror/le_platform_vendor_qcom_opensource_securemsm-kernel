@@ -1,24 +1,23 @@
 load(":securemsm_kernel.bzl", "define_consolidate_gki_modules")
 
-def define_pineapple():
+def define_sa510m_1g():
     define_consolidate_gki_modules(
-        target = "pineapple",
+        target = "sa510m.1g",
         modules = [
-            "smcinvoke_dlkm",
-            "tz_log_dlkm",
-            "hdcp_qseecom_dlkm",
             "qce50_dlkm",
             "qcedev-mod_dlkm",
-            "qrng_dlkm",
             "qcrypto-msm_dlkm",
-            "smmu_proxy_dlkm",
+            "qrng_dlkm",
             "qseecom_dlkm",
-            "seccam_test_driver",
-            "hdcp2p2_test",
-            "tornado_mod",
+            "smcinvoke_dlkm",
+            "tz_log_dlkm",
+            "si_core_test"
         ],
         extra_options = [
+            "CONFIG_QCOM_SI_CORE",
+            "CONFIG_QCOM_SI_CORE_TEST",
             "CONFIG_QCOM_SMCINVOKE",
             "CONFIG_QSEECOM_COMPAT",
         ],
+        arch = "arm",
     )

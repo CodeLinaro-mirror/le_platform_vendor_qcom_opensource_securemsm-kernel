@@ -24,9 +24,6 @@ ifeq ($(CONFIG_ARCH_QTI_VM), y)
     endif
 endif
 
-obj-$(CONFIG_QCOM_SI_CORE_TEST) += si_core_test.o
-si_core_test-objs := si_core_tests/si_core_test.o
-
 obj-$(CONFIG_QSEECOM) += qseecom_dlkm.o
 qseecom_dlkm-objs := qseecom/qseecom.o
 qseecom_dlkm-$(CONFIG_COMPAT) += qseecom/qseecom_32bit_impl.o
@@ -86,7 +83,7 @@ else ifeq ($(CONFIG_ARCH_QTI_VM),y)
     ifneq (,$(filter y,$(CONFIG_ARCH_LEMANS) $(CONFIG_ARCH_MONACO_AUTO) $(CONFIG_ARCH_NORD)))
         enable_qcedev_fe := y
     endif
-endif
+endif #CONFIG_QTI_QUIN_GVM
 
 ifeq ($(enable_qcedev_fe),y)
 
@@ -95,4 +92,21 @@ ifeq ($(enable_qcedev_fe),y)
 
     obj-$(CONFIG_QCEDEV_FE) += qcedev_fe_dlkm.o
     qcedev_fe_dlkm-objs := qcedev_fe/qcedev_fe.o qcedev_fe/qcedev_smmu.o
+endif
+
+#Enable test modules only for LA builds
+ifneq ($(CONFIG_DISABLE_TEST_MODULES), y)
+
+    obj-$(CONFIG_QCOM_SI_CORE_TEST) += si_core_test.o
+    si_core_test-objs := securemsm_tests/si_core_tests/si_core_test.o
+
+    obj-m += tornado_mod.o
+    tornado_mod-objs := securemsm_tests/tornado_mod/tornado_mod.o
+
+    KBUILD_CPPFLAGS += -DCONFIG_HDCP_QSEECOM
+    obj-m += hdcp2p2_test.o
+    hdcp2p2_test-objs := securemsm_tests/hdcp2p2_test/hdcp2p2_test.o
+
+    obj-m += seccam_test_driver.o
+    seccam_test_driver-objs := securemsm_tests/seccam_test_driver/seccam_test_driver.o
 endif
