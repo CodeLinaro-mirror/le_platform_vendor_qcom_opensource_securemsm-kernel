@@ -17,6 +17,7 @@ def define_art():
             "hdcp2p2_test",
             "si_core_test",
             "tornado_mod",
+	    "tmecom-intf_dlkm",
          ],
          extra_options = [
              "CONFIG_QCOM_SI_CORE_TEST",
@@ -24,5 +25,6 @@ def define_art():
              "CONFIG_QSEECOM_COMPAT",
              "CONFIG_QCOM_SI_CORE",
 	     "CONFIG_TZLOG_TIME_CONSOLIDATE",
+	     "CONFIG_MSM_TMECOM_QMP",
          ],
      )
