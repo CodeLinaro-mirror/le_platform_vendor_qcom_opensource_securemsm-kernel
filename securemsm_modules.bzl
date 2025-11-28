@@ -155,6 +155,8 @@ register_securemsm_module(
         "tmelog.c",
         "tmecom.c",
         "tmecom.h",
+	"tmecom_fuse_rw.c",
+	"tmecom_fuse_rw.h",
     ],
 )
 
