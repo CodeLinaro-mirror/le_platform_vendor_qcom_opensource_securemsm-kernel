@@ -7,7 +7,7 @@
 
 #include "smcinvoke_object.h"
 
-#define CHibernateTzDataMgr_UID 425
+#define CHibernateTzDataMgr_UID 444
 
 #define IHibernateTzDataMgrCB_ERROR_CB_FAILED 10
 

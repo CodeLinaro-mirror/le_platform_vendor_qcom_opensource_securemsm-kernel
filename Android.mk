@@ -118,7 +118,7 @@ ifeq ($(TARGET_BOARD_AUTO), true)
 endif #TARGET_BOARD_AUTO
 
 # Enable Hibernate kernel module
-ifneq ($(call is-board-platform-in-list, vienna64),true)
+ifeq ($(filter $(TARGET_BOARD_PLATFORM), seraph vienna),$(TARGET_BOARD_PLATFORM))
   ENABLE_HIBERNATE_TZDATA_MGR := true
 endif
 

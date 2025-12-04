@@ -11,6 +11,8 @@
 #include <linux/of.h>
 #include <linux/delay.h>
 #include <linux/version.h>
+#include <linux/pm_wakeup.h>
+
 #define DELAY_MS 30
 #define GH_MSGQ_RECV_RETRY_CNT 10
 
@@ -46,7 +48,6 @@ int smmu_proxy_unmap(void *data)
 		pr_err("%s: Failed to allocate memory!\n", __func__);
 		goto out;
 	}
-
 	req = buf;
 
 	dmabuf = data;
@@ -164,7 +165,7 @@ int smmu_proxy_switch_sid(struct device *client_dev, u32 op)
 	}
 
 	/*
-	 * No need to validate size -  gh_msgq_recv() ensures that sizeof(*resp) <
+	 * No need to validate size -  gh_msgq_recv_killable() ensures that sizeof(*resp) <
 	 * GH_MSGQ_MAX_MSG_SIZE_BYTES
 	 */
 	retry_cnt = GH_MSGQ_RECV_RETRY_CNT;
@@ -245,6 +246,8 @@ int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova,
 	buf = kzalloc(GH_MSGQ_MAX_MSG_SIZE_BYTES, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;
+		pr_err("%s: Failed to allocate memory!\n", __func__);
+		pm_relax(smmu_proxy_pvm_dev);
 		goto out;
 	}
 
@@ -259,9 +262,8 @@ int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova,
 			goto free_buf;
 		}
 	}
-
-	/* Prepare the message */
 	req = buf;
+	/* Prepare the message */
 	req->acl_desc.n_acl_entries = n_acl_entries;
 	for (i = 0; i < n_acl_entries; i++) {
 		req->acl_desc.acl_entries[i].vmid = vmids[i];
@@ -454,7 +456,6 @@ static int sender_probe_handler(struct platform_device *pdev)
 		dev_err(dev, "Failed to register wake-up source!\n");
 		goto set_callbacks_null;
 	}
-
 	ret = smmu_proxy_create_dev(&smmu_proxy_dev_fops);
 	if (ret) {
 		pr_err("%s: Failed to create character device rc: %d\n", __func__,

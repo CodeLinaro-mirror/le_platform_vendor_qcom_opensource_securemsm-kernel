@@ -114,8 +114,16 @@ ifeq ($(TARGET_BOARD_AUTO), true)
   ENABLE_SST_INVOKE_TEST := false
 endif #TARGET_BOARD_AUTO
 
+# Disabling test drivers for LW targets
+ifeq ($(TARGET_SUPPORTS_WEAR_OS), true)
+  ENABLE_HDCP_TEST := false
+  ENABLE_SECCAM_TEST := false
+  ENABLE_SI_CORE_TEST := false
+  ENABLE_SST_INVOKE_TEST := false
+endif #TARGET_SUPPORTS_WEAR_OS
+
 # Enable Hibernate kernel module
-ifeq ($(filter $(TARGET_BOARD_PLATFORM), seraph vienna64),$(TARGET_BOARD_PLATFORM))
+ifeq ($(filter $(TARGET_BOARD_PLATFORM), seraph vienna),$(TARGET_BOARD_PLATFORM))
   ENABLE_HIBERNATE_TZDATA_MGR := true
 endif
 
