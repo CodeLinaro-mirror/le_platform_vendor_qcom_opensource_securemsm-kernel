@@ -41,6 +41,7 @@
 #define CRYPTO_CONFIG_RESET 0xE01EF
 #define MAX_SPS_DESC_FIFO_SIZE 0x10000
 #define SPS_DESC_FIFO_SIZE_4K 0x1000
+#define QCE_DEFAULT_REG_OFFSET 0x20000
 #define QCE_MAX_NUM_DSCR    0x200
 #define QCE_SECTOR_SIZE	    0x200
 #define CE_CLK_100MHZ	100000000
@@ -217,11 +218,11 @@ struct qce_device {
 	bool offload_pipes_support;
 	bool no_clock_gating;
 	bool reset_with_recovery_req;
-	uint32_t bam_phy_reg_mask;
 	bool results_dump_input_support;
 	bool support_core_irq;
 	struct tasklet_struct core_irq_bottom_half;
 	bool fifo_eco_unavailable;
+	unsigned int ce_reg_offset;
 };
 
 static void print_notify_debug(struct sps_event_notify *notify);
@@ -636,10 +637,6 @@ static int _probe_ce_engine(struct qce_device *pce_dev)
 		pr_err("Unsupported QTI crypto device at 0x%x, rev %d.%d.%d\n",
 			pce_dev->phy_iobase, maj_rev, min_rev, step_rev);
 		return -EIO;
-	} else if (maj_rev > CRYPTO_CORE_MAJOR_VER_NUM) {
-		pce_dev->bam_phy_reg_mask = 0x3FFFF;
-	} else {
-		pce_dev->bam_phy_reg_mask = 0xFFFFFFFF;
 	}
 
 	/*
@@ -753,7 +750,7 @@ static int _ce_setup_hash(struct qce_device *pce_dev,
 			(sreq->alg == QCE_HASH_SHA256_HMAC) ||
 			(sreq->alg ==  QCE_HASH_AES_CMAC)) {
 		pce = cmdlistinfo->go_proc;
-		pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
+		pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->ce_reg_offset));
 		use_pipe_key = (sreq->flags & QCRYPTO_CTX_USE_PIPE_KEY) ==
 						QCRYPTO_CTX_USE_PIPE_KEY;
 		if ((sreq->flags & QCRYPTO_CTX_USE_HW_KEY)
@@ -761,7 +758,7 @@ static int _ce_setup_hash(struct qce_device *pce_dev,
 			use_hw_key = true;
 			use_pipe_key = false;
 			pce->addr = ((uint32_t)(CRYPTO_GOPROC_QC_KEY_REG +
-							pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
+							pce_dev->ce_reg_offset));
 		} else {
 			pce = cmdlistinfo->auth_key;
 			if (!use_pipe_key) {
@@ -1160,14 +1157,14 @@ static int _ce_setup_cipher(struct qce_device *pce_dev, struct qce_req *creq,
 
 	pce = cmdlistinfo->go_proc;
 
-	pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
+	pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->ce_reg_offset));
 	use_pipe_key = (creq->flags & QCRYPTO_CTX_USE_PIPE_KEY) ==
 					QCRYPTO_CTX_USE_PIPE_KEY;
 	if ((creq->flags & QCRYPTO_CTX_USE_HW_KEY) == QCRYPTO_CTX_USE_HW_KEY) {
 		use_hw_key = true;
 		use_pipe_key = false;
 		pce->addr = ((uint32_t)(CRYPTO_GOPROC_QC_KEY_REG +
-						pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
+						pce_dev->ce_reg_offset));
 	}
 
 	if (!use_pipe_key && !use_hw_key) {
@@ -1527,7 +1524,7 @@ static int _ce_f9_setup(struct qce_device *pce_dev, struct qce_f9_req *req,
 
 	/* write go */
 	pce = cmdlistinfo->go_proc;
-	pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
+	pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->ce_reg_offset));
 	return 0;
 }
 
@@ -1601,7 +1598,7 @@ static int _ce_f8_setup(struct qce_device *pce_dev, struct qce_f8_req *req,
 
 	/* write go */
 	pce = cmdlistinfo->go_proc;
-	pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->phy_iobase)) & pce_dev->bam_phy_reg_mask;
+	pce->addr = ((uint32_t)(CRYPTO_GOPROC_REG + pce_dev->ce_reg_offset));
 
 	return 0;
 }
@@ -3117,7 +3114,7 @@ static void qce_add_cmd_element(struct qce_device *pdev,
 			u32 data, struct sps_command_element **populate)
 {
 
-	(*cmd_ptr)->addr = ((uint32_t)(addr + pdev->phy_iobase)) & pdev->bam_phy_reg_mask;
+	(*cmd_ptr)->addr = ((uint32_t)(addr + pdev->ce_reg_offset));
 
 	(*cmd_ptr)->command = 0;
 	(*cmd_ptr)->data = data;
@@ -6031,6 +6028,14 @@ static int __qce_get_device_tree_data(struct platform_device *pdev,
 
 	if (of_property_read_bool((&pdev->dev)->of_node, "qcom,smmu-s1-enable"))
 		pce_dev->enable_s1_smmu = true;
+
+	if (of_property_read_u32((&pdev->dev)->of_node,
+				"qcom,ce-reg-offset",
+				&pce_dev->ce_reg_offset)) {
+		pr_info("CE reg offset not defined, defaulting to 0x%x\n",
+			QCE_DEFAULT_REG_OFFSET);
+		pce_dev->ce_reg_offset = QCE_DEFAULT_REG_OFFSET;
+	}
 
 	pce_dev->no_clock_support = of_property_read_bool((&pdev->dev)->of_node,
 					"qcom,no-clock-support");
