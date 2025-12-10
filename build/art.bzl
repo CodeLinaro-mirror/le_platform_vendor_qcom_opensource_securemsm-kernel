@@ -1,8 +1,8 @@
 load(":securemsm_kernel.bzl", "define_consolidate_gki_modules")
 
-def define_art():
+def define_art(target):
     define_consolidate_gki_modules(
-        target = "art",
+        target = target,
         modules = [
             "smcinvoke_dlkm",
 	    "tz_log_dlkm",
