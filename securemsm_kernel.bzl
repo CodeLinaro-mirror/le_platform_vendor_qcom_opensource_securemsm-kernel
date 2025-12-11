@@ -70,7 +70,7 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
     tv = "{}_{}".format(target, variant)
 
     deps = select({
-        "//build/kernel/kleaf:socrepo_true": [
+        "//build/qcom_build_extensions:qtisocrepo_true": [
             "//soc-repo:all_headers",
             "//soc-repo:{}/drivers/soc/qcom/mem_buf/mem_buf".format(kernel_build_variant),
             "//soc-repo:{}/drivers/soc/qcom/mem_buf/mem_buf_dev".format(kernel_build_variant),
@@ -80,33 +80,33 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
             "//soc-repo:{}/drivers/virt/gunyah/gh_msgq".format(kernel_build_variant),
             "//soc-repo:{}/drivers/dma-buf/heaps/qcom_dma_heaps".format(kernel_build_variant),
         ],
-        "//build/kernel/kleaf:socrepo_false": ["//msm-kernel:all_headers"],
+        "//build/qcom_build_extensions:qtisocrepo_false": ["//msm-kernel:all_headers"],
     })
     kernel_build = select({
-        "//build/kernel/kleaf:socrepo_true": "//soc-repo:{}_base_kernel".format(tv),
-        "//build/kernel/kleaf:socrepo_false": "//msm-kernel:{}".format(tv),
+        "//build/qcom_build_extensions:qtisocrepo_true": "//soc-repo:{}_base_kernel".format(tv),
+        "//build/qcom_build_extensions:qtisocrepo_false": "//msm-kernel:{}".format(tv),
     })
     if not vm_target:
         deps += select({
-            "//build/kernel/kleaf:socrepo_true": [
+            "//build/qcom_build_extensions:qtisocrepo_true": [
                 "//soc-repo:{}/drivers/soc/qcom/sps/sps_drv".format(kernel_build_variant),
             ],
-            "//build/kernel/kleaf:socrepo_false": [],
+            "//build/qcom_build_extensions:qtisocrepo_false": [],
         })
-    if target == "sun" or target == "canoe" or target == "vienna" or target == "parrot":
+    if target == "sun" or target == "canoe" or target == "art" or target == "vienna" or target == "parrot":
         deps += select({
-            "//build/kernel/kleaf:socrepo_true": [
+            "//build/qcom_build_extensions:qtisocrepo_true": [
                 "//soc-repo:{}/drivers/misc/qseecom_proxy".format(kernel_build_variant),
             ],
-            "//build/kernel/kleaf:socrepo_false": [],
+            "//build/qcom_build_extensions:qtisocrepo_false": [],
         })
 
     if target == "autogvm":
         deps += select({
-            "//build/kernel/kleaf:socrepo_true": [
+            "//build/qcom_build_extensions:qtisocrepo_true": [
                 "//soc-repo:{}/drivers/soc/qcom/hab/msm_hab".format(kernel_build_variant),
             ],
-            "//build/kernel/kleaf:socrepo_false": [],
+            "//build/qcom_build_extensions:qtisocrepo_false": [],
         })
 
     target_local_defines = ["SMCINVOKE_TRACE_INCLUDE_PATH=../../../{}/smcinvoke/compat".format(native.package_name())]

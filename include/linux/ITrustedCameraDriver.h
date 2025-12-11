@@ -1,8 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 /*
- * Copyright (c) 2022-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
-
 #include "smcinvoke_object.h"
 
 //Maximum number of ports which can exist in a HWTYPE
@@ -91,6 +90,9 @@ enum tfe_output_port_id {
 	TFE_RDI_3,
 	TFE_RDI_4,
 	TFE_SECURE_FRAME_HEADER,
+	TFE_PDAF_4,
+	TFE_UV,
+	TFE_FULL_UV,
 };
 
 //This enumerates IFE_LITE device output port resources.
@@ -146,6 +148,12 @@ enum ipe_output_port_id {
 	IPE_SECURE_FRAME_HEADER,
 	IPE_DS_C,
 	IPE_DS_Y,
+	IPE_VID_C1,
+	IPE_VID_C2,
+	IPE_DISP_C1,
+	IPE_DISP_C2,
+	IPE_APP_C1,
+	IPE_APP_C2,
 };
 
 #define ITRUSTEDCAMERADRIVER_ERROR_NOT_ALLOWED 10

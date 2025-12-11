@@ -6367,7 +6367,14 @@ static int qce_smmu_init(struct qce_device *pce_dev)
 static void qce_parse_soc_revision(struct qce_device *pce_dev)
 {
 	unsigned int soc_hw_version = 0;
-	void __iomem *hw_version_reg = ioremap(TCSR_SOC_HW_VERSION, REG_SIZE);
+	void __iomem *hw_version_reg = NULL;
+
+	pce_dev->fifo_eco_unavailable = false;
+
+	if (!is_crypto_600(pce_dev))
+		return;
+
+	hw_version_reg = ioremap(TCSR_SOC_HW_VERSION, REG_SIZE);
 
 	if (!hw_version_reg) {
 		pr_err("reg remap failed for TCSR\n");
