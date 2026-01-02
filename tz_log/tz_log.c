@@ -40,7 +40,10 @@
 #include <linux/qcom_scm.h>
 #endif
 #include <linux/wait.h>
-
+#if IS_ENABLED(CONFIG_TZLOG_QSEELOG_SMCINVOKE) && IS_ENABLED(CONFIG_QCOM_SI_CORE)
+#include <linux/firmware/qcom/si_object.h>
+#include <linux/firmware/qcom/si_core_xts.h>
+#endif
 
 /* QSEE_LOG_BUF_SIZE = 32K */
 #define QSEE_LOG_BUF_SIZE 0x8000
@@ -531,7 +534,6 @@ static uint32_t qseelog_buf_size;
 static phys_addr_t disp_buf_paddr;
 static uint32_t tmecrashdump_address_offset;
 
-static uint64_t qseelog_shmbridge_handle;
 static struct encrypted_log_info enc_qseelog_info;
 static struct encrypted_log_info enc_tzlog_info;
 
@@ -2111,6 +2113,187 @@ static int tzdbg_init_tme_log(struct platform_device *pdev, void __iomem *virt_i
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_TZLOG_QSEELOG_SMCINVOKE) && IS_ENABLED(CONFIG_QCOM_SI_CORE)
+
+#define SECURE_LOG_UID	447
+#define SECURE_LOG_REGISTER_QSEE_BUFFER	2
+
+struct qseelog_meminfo {
+	struct sg_table *sgt;
+	struct si_object *object;
+	struct device *dev;
+	void *vaddr;
+};
+
+static struct qseelog_meminfo *qseelog_meminfo_ctx;
+static struct si_object *service;
+
+static void qseelog_meminfo_smo_release(void *private)
+{
+	struct qseelog_meminfo *info = private;
+
+	if (!info)
+		return;
+
+	if (info->sgt) {
+		sg_free_table(info->sgt);
+		kfree(info->sgt);
+	}
+	if (info->vaddr)
+		dma_free_coherent(info->dev, qseelog_buf_size, info->vaddr, coh_pmem);
+	kfree(info);
+}
+
+static int qseelog_smci_helper(void)
+{
+	struct si_object *client_env = NULL;
+	struct si_object_invoke_ctx oic;
+	struct si_arg args[2] = { 0 };
+	int ret = 0, result = 0;
+
+	/* Get client env for CSecureLog service */
+	ret = si_core_get_client_env(&oic, &client_env);
+	if (ret < 0) {
+		pr_err("si_core_get_client_env failed (%d).\n", ret);
+		return ret;
+	}
+
+	/* CSecureLog_UID is 447. */
+	ret = si_core_client_env_open(&oic, client_env, SECURE_LOG_UID, &service);
+	put_si_object(client_env);
+	if (ret < 0) {
+		pr_err("si_core_client_env_open failed (%d).\n", ret);
+		return ret;
+	}
+
+	args[0].o = qseelog_meminfo_ctx->object;
+	args[0].type = SI_AT_IO;
+	args[1].type = SI_AT_END;
+
+	/* ISecureLog_OP_register_qsee_log_buffer is 2 */
+	ret = si_object_do_invoke(&oic, service, SECURE_LOG_REGISTER_QSEE_BUFFER, args, &result);
+	if (ret || result) {
+		pr_err("register_log_buffer failed: result=%d (ret=%d)\n", result, ret);
+		put_si_object(service);
+		service = NULL;
+		return -EINVAL;
+	}
+	return 0;
+}
+
+/* qsee log interface over smci */
+static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
+{
+	int ret = 0, mem_flags = 0;
+	void *buf = NULL;
+
+	if (tzdbg.is_enlarged_buf) {
+		if (of_property_read_u32((&pdev->dev)->of_node,
+			"qseelog-buf-size-v2", &qseelog_buf_size)) {
+			pr_debug("Enlarged qseelog buf size isn't defined\n");
+			qseelog_buf_size = QSEE_LOG_BUF_SIZE_V2;
+		}
+	}  else {
+		qseelog_buf_size = QSEE_LOG_BUF_SIZE;
+	}
+
+	/* Allocate DMA buffer */
+	buf = dma_alloc_coherent(&pdev->dev, qseelog_buf_size, &coh_pmem, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+
+	qseelog_meminfo_ctx = kzalloc(sizeof(*qseelog_meminfo_ctx), GFP_KERNEL);
+	if (!qseelog_meminfo_ctx) {
+		ret = -ENOMEM;
+		goto cleanup_dma;
+	}
+
+	qseelog_meminfo_ctx->sgt = kzalloc(sizeof(*qseelog_meminfo_ctx->sgt), GFP_KERNEL);
+	if (!qseelog_meminfo_ctx->sgt) {
+		ret = -ENOMEM;
+		goto cleanup_info_manual;
+	}
+
+	qseelog_meminfo_ctx->vaddr = buf;
+	qseelog_meminfo_ctx->dev = &pdev->dev;
+
+	ret = dma_get_sgtable(&pdev->dev, qseelog_meminfo_ctx->sgt, buf,
+			      coh_pmem, qseelog_buf_size);
+	if (ret) {
+		pr_err("dma_get_sgtable failed, ret: %d\n", ret);
+		goto cleanup_sgt;
+	}
+
+	/* SHARE: if HLOS donate buffer and can read
+	 * LEND:  if HLOS donate buffer but cannot read
+	 */
+	mem_flags = tzdbg.tz_qsee_plain_log_enabled ?
+		SI_CORE_MEM_OBJ_SHARE : SI_CORE_MEM_OBJ_LEND;
+
+	pr_info("MO paddr: %pad, size: %#x, mem_flags: %d\n",
+		&coh_pmem, qseelog_buf_size, mem_flags);
+
+	/* Create MO; release callback owns sgt + wrapper on put */
+	qseelog_meminfo_ctx->object = init_si_mem_object_sg(qseelog_meminfo_ctx->sgt, 0, mem_flags,
+							    qseelog_meminfo_smo_release,
+							    qseelog_meminfo_ctx);
+	if (qseelog_meminfo_ctx->object == NULL_SI_OBJECT) {
+		pr_err("init_si_mem_object_sg failed\n");
+		ret = -EINVAL;
+		goto cleanup_sgt;
+	}
+
+	/* Hold a reference of MO */
+	get_si_object(qseelog_meminfo_ctx->object);
+
+	ret = qseelog_smci_helper();
+	if (ret < 0) {
+		pr_err("qseelog smci setup failed, ret: %d\n", ret);
+		put_si_object(qseelog_meminfo_ctx->object);
+		qseelog_meminfo_ctx = NULL;
+		return ret;
+	}
+
+	/* Initialise pointers in case of share only */
+	if (mem_flags == SI_CORE_MEM_OBJ_SHARE) {
+		g_qsee_log = (struct tzdbg_log_t *)buf;
+		g_qsee_log->log_pos.wrap = 0;
+		g_qsee_log->log_pos.offset = 0;
+
+		g_qsee_log_v2 = (struct tzdbg_log_v2_t *)buf;
+		g_qsee_log_v2->log_pos.wrap = 0;
+		g_qsee_log_v2->log_pos.offset = 0;
+	}
+
+	return 0;
+
+cleanup_sgt:
+	sg_free_table(qseelog_meminfo_ctx->sgt);
+	kfree(qseelog_meminfo_ctx->sgt);
+cleanup_info_manual:
+	kfree(qseelog_meminfo_ctx);
+	qseelog_meminfo_ctx = NULL;
+cleanup_dma:
+	dma_free_coherent(&pdev->dev, qseelog_buf_size, buf, coh_pmem);
+	return ret;
+}
+
+static void tzdbg_free_qsee_log_buf(struct platform_device *pdev)
+{
+	if (qseelog_meminfo_ctx && qseelog_meminfo_ctx->object != NULL_SI_OBJECT) {
+		put_si_object(qseelog_meminfo_ctx->object);
+		qseelog_meminfo_ctx = NULL;
+		g_qsee_log = NULL;
+	}
+
+	if (service)
+		put_si_object(service);
+}
+
+#else /* Non-SMCI path */
+
+static uint64_t qseelog_shmbridge_handle;
+
 /*
  * Allocates log buffer in HLOS and register with QTEE.
  */
@@ -2170,6 +2353,7 @@ exit_dereg_bridge:
 exit_free_mem:
 	dma_free_coherent(&pdev->dev, qseelog_buf_size,
 			(void *)g_qsee_log, coh_pmem);
+	g_qsee_log = NULL;
 	return ret;
 }
 
@@ -2177,9 +2361,12 @@ static void tzdbg_free_qsee_log_buf(struct platform_device *pdev)
 {
 	if (!tzdbg.is_encrypted_log_enabled)
 		qtee_shmbridge_deregister(qseelog_shmbridge_handle);
-	dma_free_coherent(&pdev->dev, qseelog_buf_size,
-				(void *)g_qsee_log, coh_pmem);
+	if (g_qsee_log) {
+		dma_free_coherent(&pdev->dev, qseelog_buf_size, (void *)g_qsee_log, coh_pmem);
+		g_qsee_log = NULL;
+	}
 }
+#endif
 
 static int tzdbg_allocate_encrypted_log_buf(struct platform_device *pdev)
 {
@@ -2640,7 +2827,7 @@ static int tz_log_probe(struct platform_device *pdev)
 	 */
 	ret = tzdbg_register_qsee_log_buf(pdev);
 	if (ret) {
-		pr_warn("Failure with plain qsee log buffer, Skipping qsee_log node creation..\n");
+		pr_warn("Failure with plain qsee log buffer, Skip node creation.., ret: %d\n", ret);
 		tzdbg.stat[TZDBG_QSEE_LOG].avail = false;
 	}
 
@@ -2729,3 +2916,6 @@ module_platform_driver(tz_log_driver);
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("TZ Log driver");
+#if IS_ENABLED(CONFIG_TZLOG_QSEELOG_SMCINVOKE) && IS_ENABLED(CONFIG_QCOM_SI_CORE)
+MODULE_SOFTDEP("pre: si_core_module");
+#endif
