@@ -45,10 +45,10 @@ long tmecom_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
  * @ret:                  Out: ioctl return code 0 on success; negative no on failure.
  */
 struct tme_ioctl_fuse_read {
-	uint32_t addr_type;
-	uint32_t fuse_addr;
-	uint32_t fuse_data[2];
-	uint32_t qfprom_api_status;
+	__u32 addr_type;
+	__u32 fuse_addr;
+	__u32 fuse_data[2];
+	__u32 qfprom_api_status;
 	int ret;
 };
 
@@ -60,8 +60,8 @@ struct tme_ioctl_fuse_read {
  *            data[0] holds the lower 32 bits (LSB); data[1] the upper 32 bits (MSB).
  */
 struct TMEFuse_t {
-	uint32_t addr;
-	uint32_t data[2];
+	__u32 addr;
+	__u32 data[2];
 } __packed;
 
 /**
@@ -76,8 +76,8 @@ struct TMEFuse_t {
  */
 struct tme_ioctl_fuse_write_multiple {
 	struct TMEFuse_t fuse_array[TME_MAX_FUSE_WRITE_REQ];
-	uint32_t  fuse_array_len;
-	uint32_t  qfprom_api_status;
+	__u32  fuse_array_len;
+	__u32  qfprom_api_status;
 	int ret;
 };
 #endif
