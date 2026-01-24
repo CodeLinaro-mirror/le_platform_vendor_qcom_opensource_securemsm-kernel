@@ -205,7 +205,7 @@ static int msm_gpce_ion_smmu_unmap(struct qcedev_fe_ion_buf_info *dma_buffer_inf
 			__func__, dma_buffer_info->export_id, rc);
 	}
 	free_hab_handle(drv_handles, handle_id);
-	pr_err("%s: SMMU unmap command status %d\n", __func__, rc);
+	pr_debug("%s: SMMU unmap command status %d\n", __func__, rc);
 	return rc;
 
 err:

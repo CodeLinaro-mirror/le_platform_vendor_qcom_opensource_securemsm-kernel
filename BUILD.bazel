@@ -8,11 +8,15 @@ load("//build/kernel/kleaf:kernel.bzl", "ddk_headers")
 
 ddk_headers(
     name = "tmecom_kernel_headers",
-    hdrs = [
+    hdrs = glob([
+        "include/uapi/linux/*.h",
         "include/linux/tmelog.h",
-    ],
+    ]),
     includes = [
         "include",
+	"linux",
+	"include/uapi",
+	"include/uapi/linux",
     ],
 )
 

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt)	"tmecom: [%s][%d]:" fmt, __func__, __LINE__
@@ -15,12 +15,22 @@
 #include <linux/mailbox/qmp.h>
 #include <linux/uaccess.h>
 #include <linux/mailbox_controller.h>
+#include "linux/tmecom_ioctl.h"
+#include "tmecom_fuse_rw.h"
 #include <linux/version.h>
 
 #include "tmecom.h"
+#include <linux/cdev.h>
+#include <linux/device.h>
+#include <linux/fs.h>
 
 #if IS_ENABLED(CONFIG_MSM_TMECOM_QMP)
 #if IS_ENABLED(CONFIG_MSM_QMP)
+#define TMEDEV_NAME "tmecom"
+static dev_t tme_devno;
+static struct cdev tme_cdev;
+static struct class *tme_class;
+static struct device *tme_device;
 struct tmecom {
 	struct device *dev;
 	struct mbox_client cl;
@@ -30,6 +40,11 @@ struct tmecom {
 	wait_queue_head_t waitq;
 	void *txbuf;
 	bool rx_done;
+};
+
+static const struct file_operations tmecom_fops = {
+	.owner          = THIS_MODULE,
+	.unlocked_ioctl = tmecom_ioctl,
 };
 
 #if IS_ENABLED(CONFIG_DEBUG_FS) && IS_ENABLED(CONFIG_QTI_HW_KEY_MANAGER)
@@ -236,6 +251,7 @@ static int tmecom_probe(struct platform_device *pdev)
 	struct tmecom *tdev;
 	const char *label;
 	char name[32];
+	int ret = 0;
 
 	tdev = devm_kzalloc(&pdev->dev, sizeof(*tdev), GFP_KERNEL);
 	if (!tdev)
@@ -284,8 +300,54 @@ static int tmecom_probe(struct platform_device *pdev)
 
 	tmedev = tdev;
 
-	dev_info(&pdev->dev, "tmecom probe success\n");
+    // --- cdev and device node registration ---
+	ret = alloc_chrdev_region(&tme_devno, 0, 1, "tmecom");
+	if (ret < 0) {
+		dev_err(&pdev->dev, "Failed to allocate char device region\n");
+		goto err_chrdev;
+	}
+
+	cdev_init(&tme_cdev, &tmecom_fops);
+	tme_cdev.owner = THIS_MODULE;
+	ret = cdev_add(&tme_cdev, tme_devno, 1);
+	if (ret < 0) {
+		dev_err(&pdev->dev, "Failed to add cdev\n");
+		goto err_cdev_add;
+	}
+
+	tme_class = class_create("tmecom");
+	if (IS_ERR(tme_class)) {
+		dev_err(&pdev->dev, "Failed to create class\n");
+		ret = PTR_ERR(tme_class);
+		tme_class = NULL;
+		goto err_class_create;
+	}
+
+	tme_device = device_create(tme_class, NULL, tme_devno, NULL, "tmecom");
+	if (IS_ERR(tme_device)) {
+		dev_err(&pdev->dev, "Failed to create device\n");
+		ret = PTR_ERR(tme_device);
+		tme_device = NULL;
+		goto err_device_create;
+	}
+
+	dev_info(&pdev->dev, "tmecom cdev registered: major=%d minor=%d\n",
+				MAJOR(tme_devno), MINOR(tme_devno));
+	// --- end cdev and device node registration ---
 	return 0;
+
+err_device_create:
+	if (tme_class) {
+		class_destroy(tme_class);
+		tme_class = NULL;
+	}
+err_class_create:
+	cdev_del(&tme_cdev);
+err_cdev_add:
+	unregister_chrdev_region(tme_devno, 1);
+err_chrdev:
+	return ret;
+
 #if IS_ENABLED(CONFIG_DEBUG_FS) && IS_ENABLED(CONFIG_QTI_HW_KEY_MANAGER)
 err:
 	mbox_free_channel(tdev->chan);
@@ -311,6 +373,12 @@ static TMECOM_REMOVE_RETURN_TYPE tmecom_remove(struct platform_device *pdev)
 	if (tdev->chan)
 		mbox_free_channel(tdev->chan);
 
+	// --- cdev and device node cleanup ---
+	device_destroy(tme_class, tme_devno);
+	class_destroy(tme_class);
+	cdev_del(&tme_cdev);
+	unregister_chrdev_region(tme_devno, 1);
+	// --- end cdev and device node cleanup ---
 	dev_info(&pdev->dev, "tmecom remove success\n");
 	return TMECOM_REMOVE_RETURN_VAL;
 }
