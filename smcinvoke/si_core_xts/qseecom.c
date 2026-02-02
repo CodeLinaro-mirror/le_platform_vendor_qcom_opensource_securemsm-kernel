@@ -14,6 +14,7 @@
 #include <linux/firmware.h>
 #include <linux/elf.h>
 #include <linux/version.h>
+#include  "misc/qseecom_priv.h"
 
 #if KERNEL_VERSION(6, 7, 0) > LINUX_VERSION_CODE
 #include "smcinvoke.h"
