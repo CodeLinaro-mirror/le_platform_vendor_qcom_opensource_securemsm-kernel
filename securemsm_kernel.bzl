@@ -93,7 +93,7 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
             ],
             "//build/kernel/kleaf:socrepo_false": [],
         })
-    qseecom_proxy_targets = ["sun", "canoe", "vienna", "qcs610", "monaco", "alor-le", "malabar"]
+    qseecom_proxy_targets = ["sun", "canoe", "vienna", "qcs610", "monaco", "alor-le", "malabar", "seraph", "vienna-le"]
     if target in qseecom_proxy_targets:
         deps += select({
             "//build/kernel/kleaf:socrepo_true": [
@@ -148,11 +148,14 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
     )
 
 def define_consolidate_gki_modules(target, modules, extra_options = [], config_option = None):
+    # List of targets for which vm_target should be False
+    le_targets = ["vienna-le"]
+    vm_target = False if target in le_targets else True
     define_target_variant_modules(target, "consolidate", modules, extra_options, config_option)
     define_target_variant_modules(target, "gki", modules, extra_options, config_option)
     define_target_variant_modules(target, "perf", modules, extra_options, config_option)
-    define_target_variant_modules(target, "debug-defconfig", modules, extra_options, config_option, vm_target = True)
-    define_target_variant_modules(target, "defconfig", modules, extra_options, config_option, vm_target = True)
+    define_target_variant_modules(target, "debug-defconfig", modules, extra_options, config_option, vm_target = vm_target)
+    define_target_variant_modules(target, "defconfig", modules, extra_options, config_option, vm_target = vm_target)
 
 def define_vm_modules(target, modules, extra_options = [], config_option = None):
     define_target_variant_modules(target, "debug-defconfig", modules, extra_options, config_option, vm_target = True)
