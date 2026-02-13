@@ -1,8 +1,8 @@
 load(":securemsm_kernel.bzl", "define_consolidate_gki_modules")
 
-def define_malabar():
+def define_vienna_le():
     define_consolidate_gki_modules(
-        target = "malabar",
+        target = "vienna-le",
         modules = [
             "smcinvoke_dlkm",
             "tz_log_dlkm",
@@ -13,18 +13,17 @@ def define_malabar():
             "qrng_dlkm",
             "qcrypto-msm_dlkm",
             "smmu_proxy_dlkm",
+            "tmecom-intf_dlkm",
             "seccam_test_driver",
             "hdcp2p2_test",
             "si_core_test",
             "tornado_mod",
-	    "tmecom-intf_dlkm",
-         ],
+        ],
         extra_options = [
-             "CONFIG_QCOM_SI_CORE_TEST",
-             "CONFIG_QCOM_SMCINVOKE",
-             "CONFIG_QSEECOM_COMPAT",
-             "CONFIG_QCOM_SI_CORE",
-             "CONFIG_TZLOG_TIME_CONSOLIDATE",
-         ],
+            "CONFIG_QCOM_SMCINVOKE",
+            "CONFIG_QSEECOM_COMPAT",
+            "CONFIG_QCOM_SI_CORE",
+            "CONFIG_MSM_TMECOM_QMP",
+            "CONFIG_QCOM_SI_CORE_TEST",
+        ],
     )
-
