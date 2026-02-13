@@ -46,7 +46,11 @@
 #include <linux/mem-buf.h>
 #include <linux/version.h>
 #include "linux/qseecom_api.h"
+#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
+#include <linux/crypto-qti-common.h>
+#else
 #include "ice.h"
+#endif
 #if IS_ENABLED(CONFIG_QSEECOM_PROXY)
 #include <linux/qseecom_kernel.h>
 #include "misc/qseecom_priv.h"
@@ -550,6 +554,11 @@ static int __qseecom_alloc_coherent_buf(
 			uint32_t size, u8 **vaddr, phys_addr_t *paddr);
 static void __qseecom_free_coherent_buf(uint32_t size,
 				u8 *vaddr, phys_addr_t paddr);
+
+#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE) && IS_ENABLED(CONFIG_QSEECOM_PROXY)
+static int __qseecom_create_key_in_slot(uint8_t usage_code, uint8_t key_slot,
+					const uint8_t *key_id, const uint8_t *inhash32);
+#endif
 
 #define QSEECOM_SCM_EBUSY_WAIT_MS 30
 #define QSEECOM_SCM_EBUSY_MAX_RETRY 67
@@ -5581,6 +5590,9 @@ const static struct qseecom_drv_ops qseecom_driver_ops = {
 	.qseecom_start_app = __qseecom_start_app,
 	.qseecom_shutdown_app = __qseecom_shutdown_app,
 	.qseecom_process_listener_from_smcinvoke = __qseecom_process_listener_from_smcinvoke,
+#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
+	.qseecom_create_key_in_slot = __qseecom_create_key_in_slot,
+#endif
 };
 
 int get_qseecom_kernel_fun_ops(void)
@@ -6670,10 +6682,17 @@ static int qseecom_enable_ice_setup(int usage)
 	int ret = 0;
 
 	if (usage == QSEOS_KM_USAGE_UFS_ICE_DISK_ENCRYPTION)
+#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
+		ret = crypto_qti_ice_setup_ice_hw("ufs", true);
+#else
 		ret = qcom_ice_setup_ice_hw("ufs", true);
+#endif
 	else if (usage == QSEOS_KM_USAGE_SDCC_ICE_DISK_ENCRYPTION)
+#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
+		crypto_qti_ice_setup_ice_hw("sdcc", true);
+#else
 		ret = qcom_ice_setup_ice_hw("sdcc", true);
-
+#endif
 	return ret;
 }
 
@@ -6682,10 +6701,17 @@ static int qseecom_disable_ice_setup(int usage)
 	int ret = 0;
 
 	if (usage == QSEOS_KM_USAGE_UFS_ICE_DISK_ENCRYPTION)
+#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
+		crypto_qti_ice_setup_ice_hw("ufs", false);
+#else
 		ret = qcom_ice_setup_ice_hw("ufs", false);
+#endif
 	else if (usage == QSEOS_KM_USAGE_SDCC_ICE_DISK_ENCRYPTION)
+#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE)
+		crypto_qti_ice_setup_ice_hw("sdcc", false);
+#else
 		ret = qcom_ice_setup_ice_hw("sdcc", false);
-
+#endif
 	return ret;
 }
 
@@ -6726,6 +6752,161 @@ static int qseecom_get_ce_hw_instance(uint32_t unit, uint32_t usage)
 	}
 	return pce_info_use->num_ce_pipe_entries;
 }
+
+#if IS_ENABLED(CONFIG_QTI_CRYPTO_FDE) && IS_ENABLED(CONFIG_QSEECOM_PROXY)
+static int __qseecom_create_key_in_slot(uint8_t usage_code, uint8_t key_slot,
+					const uint8_t *key_id, const uint8_t *inhash32)
+{
+	int i;
+	uint32_t *ce_hw = NULL;
+	uint32_t pipe = 0;
+	int ret = 0;
+	uint32_t flags = 0;
+	struct qseecom_create_key_req create_key_req;
+	struct qseecom_key_generate_ireq generate_key_ireq;
+	struct qseecom_key_select_ireq set_key_ireq;
+	uint32_t entries = 0;
+	bool new_key_generated = false;
+	static struct qseecom_dev_handle local_handle = {0};
+	static struct qseecom_dev_handle *data = &local_handle;
+
+	create_key_req.usage = usage_code;
+	memset((void *)create_key_req.hash32, 0, QSEECOM_HASH_SIZE);
+
+	if (create_key_req.usage < QSEOS_KM_USAGE_DISK_ENCRYPTION ||
+		create_key_req.usage >= QSEOS_KM_USAGE_MAX) {
+		pr_err("unsupported usage %d\n", create_key_req.usage);
+		ret = -EFAULT;
+		return ret;
+	}
+	if (key_id == NULL) {
+		pr_err("Key ID is NULL\n");
+		ret = -EINVAL;
+		return ret;
+	}
+	entries = qseecom_get_ce_hw_instance(DEFAULT_CE_INFO_UNIT, create_key_req.usage);
+	if (entries <= 0) {
+		pr_err("no ce instance for usage %d instance %d\n",
+			DEFAULT_CE_INFO_UNIT, create_key_req.usage);
+		ret = -EINVAL;
+		return ret;
+	}
+
+	ce_hw = kcalloc(entries, sizeof(*ce_hw), GFP_KERNEL);
+	if (!ce_hw) {
+		ret = -ENOMEM;
+		return ret;
+	}
+	ret = __qseecom_get_ce_pipe_info(create_key_req.usage, &pipe, &ce_hw,
+					 DEFAULT_CE_INFO_UNIT);
+	if (ret) {
+		pr_err("Failed to retrieve pipe/ce_hw info: %d\n", ret);
+		ret = -EINVAL;
+		goto free_buf;
+	}
+
+	if (qseecom.fde_key_size)
+		flags |= QSEECOM_ICE_FDE_KEY_SIZE_32_BYTE;
+	else
+		flags |= QSEECOM_ICE_FDE_KEY_SIZE_16_BYTE;
+
+	if (qseecom.enable_key_wrap_in_ks)
+		flags |= ENABLE_KEY_WRAP_IN_KS;
+
+	generate_key_ireq.flags = flags;
+	generate_key_ireq.qsee_command_id = QSEOS_GENERATE_KEY;
+	memset((void *)generate_key_ireq.key_id, 0, QSEECOM_KEY_ID_SIZE);
+	memset((void *)generate_key_ireq.hash32, 0, QSEECOM_HASH_SIZE);
+	memcpy((void *)generate_key_ireq.key_id, key_id, QSEECOM_KEY_ID_SIZE);
+
+	//Copy inhash if available
+	if (inhash32 != NULL)
+		memcpy((void *)create_key_req.hash32, (void *)inhash32, QSEECOM_HASH_SIZE);
+
+	memcpy((void *)generate_key_ireq.hash32, (void *)create_key_req.hash32,
+		QSEECOM_HASH_SIZE);
+
+	ret = __qseecom_generate_and_save_key(data, create_key_req.usage,
+					      &generate_key_ireq);
+
+	if ((ret != 0) && (ret != QSEOS_RESULT_FAIL_KEY_ID_EXISTS)) {
+		pr_err("Failed to generate key on storage: %d\n", ret);
+		goto free_buf;
+	}
+	if (ret == 0) {
+		//New key was created
+		new_key_generated = true;
+	}
+
+	for (i = 0; i < entries; i++) {
+		set_key_ireq.qsee_command_id = QSEOS_SET_KEY;
+		if (create_key_req.usage == QSEOS_KM_USAGE_UFS_ICE_DISK_ENCRYPTION) {
+			set_key_ireq.ce = QSEECOM_UFS_ICE_CE_NUM;
+			set_key_ireq.pipe = key_slot;
+
+		} else if (create_key_req.usage == QSEOS_KM_USAGE_SDCC_ICE_DISK_ENCRYPTION) {
+			set_key_ireq.ce = QSEECOM_SDCC_ICE_CE_NUM;
+			set_key_ireq.pipe = key_slot;
+
+		} else {
+			set_key_ireq.ce = ce_hw[i];
+			set_key_ireq.pipe = pipe;
+		}
+		set_key_ireq.flags = flags;
+
+		/* set both PIPE_ENC and PIPE_ENC_XTS*/
+		set_key_ireq.pipe_type = QSEOS_PIPE_ENC|QSEOS_PIPE_ENC_XTS;
+		memset((void *)set_key_ireq.key_id, 0, QSEECOM_KEY_ID_SIZE);
+		memset((void *)set_key_ireq.hash32, 0, QSEECOM_HASH_SIZE);
+
+		memcpy((void *)set_key_ireq.key_id, key_id, QSEECOM_KEY_ID_SIZE);
+		memcpy((void *)set_key_ireq.hash32, (void *)create_key_req.hash32,
+			QSEECOM_HASH_SIZE);
+		/*
+		 * It will return false if it is GPCE based crypto instance or
+		 * ICE is setup properly
+		 */
+		ret = qseecom_enable_ice_setup(create_key_req.usage);
+		if (ret)
+			goto free_buf;
+
+		do {
+			ret = __qseecom_set_clear_ce_key(data, create_key_req.usage,
+							 &set_key_ireq);
+			/*
+			 * wait a little before calling scm again to let other
+			 * processes run
+			 */
+			if (ret == QSEOS_RESULT_FAIL_PENDING_OPERATION)
+				msleep(50);
+
+		} while (ret == QSEOS_RESULT_FAIL_PENDING_OPERATION);
+
+		qseecom_disable_ice_setup(create_key_req.usage);
+
+		if (ret) {
+			pr_err("Failed to create key: pipe %d, ce %d: %d\n",
+				pipe, ce_hw[i], ret);
+			goto free_buf;
+		} else {
+			pr_err("Set the key successfully\n");
+			if ((create_key_req.usage ==
+				QSEOS_KM_USAGE_UFS_ICE_DISK_ENCRYPTION) ||
+				(create_key_req.usage ==
+				QSEOS_KM_USAGE_SDCC_ICE_DISK_ENCRYPTION))
+				goto free_buf;
+		}
+	}
+
+free_buf:
+	kfree_sensitive(ce_hw);
+	if ((ret == 0) && (new_key_generated)) {
+		//Success , key already exists code
+		ret = QSEOS_RESULT_FAIL_KEY_ID_EXISTS;
+	}
+	return ret;
+}
+#endif //CONFIG_QTI_CRYPTO_FDE
 
 static int qseecom_create_key(struct qseecom_dev_handle *data,
 			void __user *argp)
@@ -6860,7 +7041,7 @@ static int qseecom_create_key(struct qseecom_dev_handle *data,
 			pr_err("Set the key successfully\n");
 			if ((create_key_req.usage ==
 				QSEOS_KM_USAGE_UFS_ICE_DISK_ENCRYPTION) ||
-			     (create_key_req.usage ==
+				(create_key_req.usage ==
 				QSEOS_KM_USAGE_SDCC_ICE_DISK_ENCRYPTION))
 				goto free_buf;
 		}
@@ -8508,14 +8689,12 @@ long qseecom_ioctl(struct file *file,
 		break;
 	}
 	case QSEECOM_IOCTL_SET_ICE_INFO: {
-		struct qseecom_ice_data_t ice_data;
-
-		ret = copy_from_user(&ice_data, argp, sizeof(ice_data));
-		if (ret) {
-			pr_err("copy_from_user failed\n");
-			return -EFAULT;
-		}
-		qcom_ice_set_fde_flag(ice_data.flag);
+	/*
+	 * Return success for backwards compatibility
+	 * This call is redundant and not required anymore
+	 */
+		pr_info("SET_ICE_INFO is reduntant call,return success for backwards compatibility\n");
+		ret = 0;
 		break;
 	}
 	case QSEECOM_IOCTL_FBE_CLEAR_KEY: {
@@ -9846,7 +10025,7 @@ static int qseecom_register_shmbridge(struct platform_device *pdev)
 {
 	int ret = 0;
 	if (!qtee_shmbridge_is_enabled())
-		return 0; 
+		return 0;
 	ret = qseecom_register_heap_shmbridge(pdev, "qseecom_ta_mem",
 					&qseecom.ta_bridge_handle);
 	if (ret)
