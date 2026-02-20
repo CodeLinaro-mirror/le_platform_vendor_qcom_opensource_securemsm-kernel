@@ -336,6 +336,11 @@ static int qcedev_release(struct inode *inode, struct file *file)
 	struct qcedev_handle *handle;
 
 	handle =  file->private_data;
+	if (!handle) {
+		pr_err("%s: invalid handle\n", __func__);
+		return 0;
+	}
+
 	podev =  handle->cntl;
 	if (podev != NULL && podev->magic != QCEDEV_MAGIC) {
 		pr_err("%s: invalid handle %pK\n",
