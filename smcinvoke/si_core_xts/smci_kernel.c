@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #define pr_fmt(fmt) "smcinvoke_kernel: %s: " fmt, __func__
@@ -8,8 +8,6 @@
 #include "IClientEnv.h"
 
 #if IS_ENABLED(CONFIG_QSEECOM_COMPAT)
-#include "../IQSEEComCompat.h"
-#include "../IQSEEComCompatAppLoader.h"
 #include "linux/qseecom_api.h"
 #if IS_ENABLED(CONFIG_QSEECOM_PROXY)
 #include <linux/qseecom_kernel.h>

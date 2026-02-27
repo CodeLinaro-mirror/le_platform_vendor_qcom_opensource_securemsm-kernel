@@ -1959,7 +1959,6 @@ static ssize_t tzdbg_fs_read_encrypted(struct clients_info_t *clients_info,
 static ssize_t tzdbg_fs_read(struct file *file, char __user *buf,
 	size_t count, loff_t *offp)
 {
-	struct seq_file *seq = file->private_data;
 	int tz_id = TZDBG_STATS_MAX;
 	ssize_t len = 0;
 	struct clients_info_t *clients_info = NULL;
@@ -1973,12 +1972,10 @@ static ssize_t tzdbg_fs_read(struct file *file, char __user *buf,
 	if (!clients_info)
 		return -ENODATA;
 
-	if (seq)
-		tz_id = *(int *)(seq->private);
-	else {
-		pr_err("%s: Seq data null unable to proceed\n", __func__);
-		return 0;
-	}
+	tz_id = *(int *)((struct seq_file *)file->private_data)->private;
+
+	if (tz_id < 0 || tz_id >= TZDBG_STATS_MAX)
+		return -EINVAL;
 
 	if (!tzdbg.is_encrypted_log_enabled ||
 	    (tz_id == TZDBG_HYP_GENERAL || tz_id == TZDBG_HYP_LOG)
@@ -1994,6 +1991,16 @@ static int tzdbg_procfs_open(struct inode *inode, struct file *file)
 {
 	struct clients_info_t *clients_info = NULL;
 	int ret = 0;
+	void *data = NULL;
+
+#if KERNEL_VERSION(6, 0, 0) >= LINUX_VERSION_CODE
+	data = PDE_DATA(inode);
+#else
+	data = pde_data(inode);
+#endif
+
+	if (!data)
+		return -EINVAL;
 
 	clients_info = kzalloc(sizeof(*clients_info), GFP_KERNEL);
 	if (!clients_info)
@@ -2004,11 +2011,8 @@ static int tzdbg_procfs_open(struct inode *inode, struct file *file)
 	list_add(&clients_info->list, &clients_list);
 	mutex_unlock(&tzdbg_mutex);
 
-#if (LINUX_VERSION_CODE <= KERNEL_VERSION(6,0,0))
-	ret = single_open(file, NULL, PDE_DATA(inode));
-#else
-	ret = single_open(file, NULL, pde_data(inode));
-#endif
+	ret = single_open(file, NULL, data);
+
 	if (ret) {
 		mutex_lock(&tzdbg_mutex);
 		list_del(&clients_info->list);

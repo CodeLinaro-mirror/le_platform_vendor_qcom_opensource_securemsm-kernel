@@ -1440,7 +1440,7 @@ static const struct file_operations server_fops = {
 
 static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	int i, ret;
+	int ret;
 
 	struct si_object *object = filp->private_data;
 
@@ -1545,6 +1545,8 @@ static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned lon
 	if (ret) {
 		pr_err("si_object_do_invoke failed %d, %d.\n", ret, u_req.result);
 
+/* Don't compile for 6.11.x+ versions */
+#if KERNEL_VERSION(6, 11, 0) > LINUX_VERSION_CODE
 		if (u_req.result) {
 			if (ret == -EINVAL || ret == -ENOMEM ||	ret == -ENOSPC) {
 
@@ -1552,7 +1554,7 @@ static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned lon
 
 				marshal_in_req_cleanup(u, 0);
 
-				for (i = 0; u[i].type; i++) {
+				for (int i = 0; u[i].type; i++) {
 					if (u[i].type == SI_AT_IO &&
 						typeof_si_object(u[i].o) != SI_OT_USER)
 						put_si_object(u[i].o);
@@ -1561,7 +1563,7 @@ static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned lon
 				goto out_failed;
 			}
 		}
-
+#endif
 		/* SI-CORE made an unsuccessful invocation. */
 		/* ret == -EINVAL || ret == -ENOMEM && !u_req.result: Marshal out failed.
 		 * ret == -EAGAIN || ret == -ENODEV: QTEE communication failed.
