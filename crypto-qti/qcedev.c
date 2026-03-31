@@ -2354,7 +2354,7 @@ static long qcedev_ext_cipher_ioctl(struct qcedev_handle *handle,
 	return err;
 }
 
-int qcedev_translate_clk_profile(uint32_t clk_profile)
+static int qcedev_translate_clk_profile(uint32_t clk_profile)
 {
 	switch (clk_profile) {
 	// These values were calculated through internal
