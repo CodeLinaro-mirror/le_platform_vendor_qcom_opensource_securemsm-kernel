@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "hdcp_main.h"
@@ -10,6 +10,11 @@
 struct hdcp_ta_interface ta_interface;
 static DEFINE_MUTEX(hdcp1_mutex_g);
 static DEFINE_MUTEX(hdcp2_mutex_g);
+
+static dev_t hdcp_drv_dev;
+static struct class *hdcp_drv_class;
+struct device *hdcp_device;
+bool use_smcinvoke;
 
 static void select_interface(bool use_smcinvoke)
 {
@@ -309,26 +314,68 @@ EXPORT_SYMBOL_GPL(hdcp1_stop);
 static int __init hdcp_module_init(void)
 {
 	struct device_node *np = NULL;
-	bool use_smcinvoke = false;
-
+	int ret = 0;
 	np = of_find_compatible_node(NULL, NULL, "qcom,hdcp");
 	if (!np) {
 		/*select qseecom interface as default if hdcp node
 		*is not present in dtsi
 		 */
-		 select_interface(use_smcinvoke);
-		return 0;
-		}
+		pr_warn("hdcp node not found in DT using qseecom interface\n");
+		use_smcinvoke = false;
+		select_interface(use_smcinvoke);
+		ret = 0;
+		/**
+		 * we dont have to register the driver
+		 * if interface is qseecom way of loading the TA
+		 * we can exit
+		 */
+		goto exit;
+	}
 
 	use_smcinvoke = of_property_read_bool(np, "qcom,use-smcinvoke");
 
 	select_interface(use_smcinvoke);
 
-	return 0;
+	ret = alloc_chrdev_region(&hdcp_drv_dev, 0, 1, "hdcp_driver");
+	if (ret < 0) {
+		pr_err("failed to alloc device num\n");
+		ret = -1;
+		goto exit;
+	}
+	hdcp_drv_class = class_create("hdcp_driver");
+	if (IS_ERR(hdcp_drv_class)) {
+		pr_err("hdcp driver class creation failed\n");
+		ret = -1;
+		goto unregister_chr_dev;
+
+	}
+	pr_info("hdcp driver registered major : %d - minor: %d\n",
+		 MAJOR(hdcp_drv_dev), MINOR(hdcp_drv_dev));
+	hdcp_device = device_create(hdcp_drv_class, NULL, hdcp_drv_dev, NULL, "hdcp_driver");
+	if (IS_ERR(hdcp_device)) {
+		ret = PTR_ERR(hdcp_device);
+		pr_err("device_create failed err: %d\n", ret);
+		goto destroy_class;
+	}
+exit:
+	pr_debug(" %s - status: %d\n", __func__, ret);
+	return ret;
+destroy_class:
+	class_destroy(hdcp_drv_class);
+unregister_chr_dev:
+	unregister_chrdev_region(hdcp_drv_dev, 1);
+	return ret;
 }
 
 static void __exit hdcp_module_exit(void)
 {
+	if (use_smcinvoke) {
+		device_destroy(hdcp_drv_class, hdcp_drv_dev);
+		class_destroy(hdcp_drv_class);
+		unregister_chrdev_region(hdcp_drv_dev, 1);
+	}
+	pr_debug("%s - cleaned up all resources\n", __func__);
+
 }
 
 MODULE_LICENSE("GPL v2");
