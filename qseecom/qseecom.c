@@ -2,8 +2,8 @@
 /*
  * QTI Secure Execution Environment Communicator (QSEECOM) driver
  *
- * Copyright (c) 2012-2021, The Linux Foundation. All rights reserved.
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+ * All rights reserved.
  */
 
 #define pr_fmt(fmt) "QSEECOM: %s: " fmt, __func__
@@ -6906,8 +6906,33 @@ free_buf:
 	}
 	return ret;
 }
-#endif //CONFIG_QTI_CRYPTO_FDE
 
+static int qseecom_create_key(struct qseecom_dev_handle *data,
+			void __user *argp)
+{
+	int ret = 0;
+	struct qseecom_create_key_req create_key_req;
+
+	K_COPY_FROM_USER(ret, &create_key_req, argp, sizeof(create_key_req));
+	if (ret) {
+		pr_err("copy_from_user failed\n");
+		return ret;
+	}
+	if (create_key_req.usage < QSEOS_KM_USAGE_DISK_ENCRYPTION ||
+		create_key_req.usage >= QSEOS_KM_USAGE_MAX) {
+		pr_err("unsupported usage %d\n", create_key_req.usage);
+		return -EFAULT;
+	}
+	ret = crypto_qti_ice_add_userdata(create_key_req.hash32);
+	if (ret) {
+		if (ret == -EOPNOTSUPP)
+			pr_err("FDE is disabled\n");
+		else
+			pr_err("Failed to add userdata, ret=%d\n", ret);
+	}
+	return ret;
+}
+#else
 static int qseecom_create_key(struct qseecom_dev_handle *data,
 			void __user *argp)
 {
@@ -7051,6 +7076,7 @@ free_buf:
 	kfree_sensitive(ce_hw);
 	return ret;
 }
+#endif //CONFIG_QTI_CRYPTO_FDE
 
 static int qseecom_wipe_key(struct qseecom_dev_handle *data,
 				void __user *argp)
