@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include "smcinvoke_object.h"
@@ -16,6 +16,8 @@
 #include "hdcp1.h"
 #include "hdcp1_ops.h"
 #include "hdcp2p2.h"
+
+extern struct device *hdcp_device;
 
 static int hdcp1_verify_key(struct hdcp1_smcinvoke_handle *handle)
 {
@@ -91,12 +93,27 @@ static int load_app(char *app_name, struct Object *app_obj,
 	size_t size = 0;
 	struct Object client_env = {NULL, NULL};
 	struct Object app_loader = {NULL, NULL};
+	const struct firmware *hdcp_fw = NULL;
+	char hdcp_fw_name[HDCP_FW_LEN] = {0};
 
-	buffer = firmware_request_from_smcinvoke(app_name, &size, &shm);
-	if (buffer == NULL) {
-		pr_err("firmware_request_from_smcinvoke failed\n");
-		return -EINVAL;
+	/* use .mbn to load the hdcp TA(s)*/
+	snprintf(hdcp_fw_name, sizeof(hdcp_fw_name), "%s.mbn", app_name);
+	pr_debug("loading trusted app : %s\n", hdcp_fw_name);
+	ret = firmware_request_nowarn(&hdcp_fw, hdcp_fw_name, hdcp_device);
+	if (ret) {
+		pr_err("failed to load : %s ret: %d falling back to splitbins\n", hdcp_fw_name, ret);
+		/* use split bins to load the hdcp TA(s) if full mbn failed to load */
+		buffer = firmware_request_from_smcinvoke(app_name, &size, &shm);
+		if (buffer == NULL) {
+			pr_err("firmware_request_from_smcinvoke failed for splitbins\n");
+			return -EINVAL;
+		}
+	} else {
+		buffer = (uint8_t *)hdcp_fw->data;
+		size = hdcp_fw->size;
 	}
+	pr_info("hdcp fw size: %lu\n", size);
+
 
 	ret = get_client_env_object(&client_env);
 	if (ret) {
@@ -130,6 +147,8 @@ static int load_app(char *app_name, struct Object *app_obj,
 	}
 
 error:
+	if (hdcp_fw)
+		release_firmware(hdcp_fw);
 	qtee_shmbridge_free_shm(&shm);
 	Object_ASSIGN_NULL(app_loader);
 	Object_ASSIGN_NULL(client_env);
