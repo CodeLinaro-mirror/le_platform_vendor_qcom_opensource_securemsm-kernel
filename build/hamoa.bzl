@@ -1,8 +1,8 @@
 load(":securemsm_kernel.bzl", "define_consolidate_gki_modules")
 
-def define_sun():
+def define_hamoa():
     define_consolidate_gki_modules(
-        target = "sun",
+        target = "hamoa",
         modules = [
             "smcinvoke_dlkm",
             "tz_log_dlkm",
@@ -24,6 +24,8 @@ def define_sun():
              "CONFIG_QCOM_SMCINVOKE",
              "CONFIG_QSEECOM_COMPAT",
              "CONFIG_QCOM_SI_CORE",
-	     "CONFIG_MSM_TMECOM_QMP",
+             "CONFIG_MSM_TMECOM_QMP",
+             "CONFIG_TZLOG_TIME_CONSOLIDATE",
+             "CONFIG_TZLOG_QSEELOG_SMCINVOKE",
          ],
      )

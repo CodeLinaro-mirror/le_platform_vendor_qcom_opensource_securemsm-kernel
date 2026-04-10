@@ -224,7 +224,14 @@ register_securemsm_module(
 register_securemsm_module(
     name = "si_core_test",
     path = SI_CORE_TEST_PATH,
-    default_srcs = ["si_core_test.c"],
+    default_srcs = [
+                    "si_core_test.c",
+                    "si_core_test.h",
+                    "si_core_test_cbo.c",
+                    "si_core_test_cbo_impl.c",
+                    "si_core_test_smo.c",
+                    "si_core_test_smo_impl.c"
+    ],
 )
 
 register_securemsm_module(

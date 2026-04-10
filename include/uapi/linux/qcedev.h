@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 /*
  * Copyright (c) 2019, The Linux Foundation. All rights reserved.
- * Copyright (c) 2023-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef _UAPI_QCEDEV__H
@@ -25,6 +25,13 @@
 #define QCEDEV_AES_KEY_128	16
 #define QCEDEV_AES_KEY_192	24
 #define QCEDEV_AES_KEY_256	32
+
+enum qcedev_clk_vote_enum {
+	QCEDEV_CLK_VOTE_AT_LOWSVS = 1,
+	QCEDEV_CLK_VOTE_AT_SVS = 2,
+	QCEDEV_CLK_VOTE_AT_NOMINAL = 3,
+	QCEDEV_CLK_VOTE_AT_TURBO = 4,
+};
 
 /**
  *qcedev_oper_enum: Operation types
@@ -501,6 +508,17 @@ struct  qcedev_unmap_buf_req {
 	__u32        num_fds;
 };
 
+/**
+ * struct qcedev_cntrl_clk_req - Holds the control clock request information
+ * flags (IN):         Not yet supported. Field is reserved.
+ * clk_profile (IN):   Clock profile. Chosen from: LOWSVS, SVS, NOMINAL, TURBO
+ *                     see QCEDEV_CLK_SPEED_* definitions above.
+ */
+struct qcedev_cntrl_clk_req {
+	__u32        flags;
+	enum qcedev_clk_vote_enum clk_profile;
+};
+
 struct file;
 
 long qcedev_ioctl(struct file *file,
@@ -534,4 +552,6 @@ long qcedev_ioctl(struct file *file,
 	_IOWR(QCEDEV_IOC_MAGIC, 12, struct qcedev_offload_cipher_op_req)
 #define QCEDEV_IOCTL_EXT_CIPHER_OP_REQ		\
 	_IOWR(QCEDEV_IOC_MAGIC, 12, struct qcedev_extended_cipher_req)
+#define QCEDEV_IOCTL_CONTROL_CLKS	\
+	_IOWR(QCEDEV_IOC_MAGIC, 13, struct qcedev_cntrl_clk_req)
 #endif /* _UAPI_QCEDEV__H */
