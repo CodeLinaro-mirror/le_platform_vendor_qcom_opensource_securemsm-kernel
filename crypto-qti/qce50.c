@@ -5972,15 +5972,13 @@ static int __qce_get_device_tree_data(struct platform_device *pdev,
 		if (of_property_read_u32((&pdev->dev)->of_node,
 			"qcom,bam-pipe-offload-cpb-hlos",
 		&pce_dev->ce_bam_info.pipe_pair_index[QCE_PIPE_CPB_HLOS])) {
-			pr_err("Fail to get bam offload cpb-hlos pipe pair info.\n");
-			return -EINVAL;
+			pr_info("No bam offload cpb-hlos pipe pair info.\n");
 		}
 
 		if (of_property_read_u32((&pdev->dev)->of_node,
 			"qcom,bam-pipe-offload-hlos-hlos",
 		&pce_dev->ce_bam_info.pipe_pair_index[QCE_PIPE_HLOS_HLOS])) {
-			pr_err("Fail to get bam offload hlos-hlos info.\n");
-			return -EINVAL;
+			pr_info("No bam offload hlos-hlos info.\n");
 		}
 		if (of_property_read_u32((&pdev->dev)->of_node,
 			"qcom,bam-pipe-offload-hlos-hlos-1",
@@ -6558,6 +6556,7 @@ EXPORT_SYMBOL(qce_close);
 int qce_hw_support(void *handle, struct ce_hw_support *ce_support)
 {
 	struct qce_device *pce_dev = (struct qce_device *)handle;
+	int i;
 
 	if (ce_support == NULL)
 		return -EINVAL;
@@ -6603,6 +6602,13 @@ int qce_hw_support(void *handle, struct ce_hw_support *ce_support)
 		ce_support->max_request = MAX_QCE_BAM_REQ;
 	else
 		ce_support->max_request = 1;
+
+	ce_support->offload_ops_mask = 0;
+	for (i = QCE_OFFLOAD_HLOS_HLOS; i < QCE_OFFLOAD_OPER_LAST; i++) {
+		if (pce_dev->ce_bam_info.pipe_pair_index[i])
+			ce_support->offload_ops_mask |= BIT(i);
+	}
+	ce_support->key_index_mode = pce_dev->key_index_mode_enabled;
 	return 0;
 }
 EXPORT_SYMBOL(qce_hw_support);

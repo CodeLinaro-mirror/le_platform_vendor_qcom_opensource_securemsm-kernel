@@ -2173,6 +2173,13 @@ qcedev_check_extended_cipher_params(struct qcedev_extended_cipher_req *req,
 		goto error;
 	}
 
+	if (!podev->ce_support.key_index_mode &&
+			!(podev->ce_support.offload_ops_mask & BIT(req->op))) {
+		pr_err("%s: Unsupported offload op %d, pipe not configured\n",
+		       __func__, req->op);
+		goto error;
+	}
+
 	if (qcedev_check_offload_key(req, podev))
 		goto error;
 
