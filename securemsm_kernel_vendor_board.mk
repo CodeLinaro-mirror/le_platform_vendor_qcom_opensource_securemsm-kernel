@@ -18,7 +18,7 @@ ifeq ($(ENABLE_SECUREMSM_DLKM), true)
   ifeq ($(TARGET_USES_SMMU_PROXY), true)
     ENABLE_SMMU_PROXY := true
   endif #TARGET_USES_SMMU_PROXY
-  ifeq ($(filter $(TARGET_BOARD_PLATFORM), canoe vienna chora seraph),$(TARGET_BOARD_PLATFORM))
+  ifeq ($(filter $(TARGET_BOARD_PLATFORM), hamoa_la canoe vienna chora seraph),$(TARGET_BOARD_PLATFORM))
     ENABLE_TMECOM_INTF_DLKM := true
   endif
 endif #ENABLE_SECUREMSM_DLKM
@@ -82,7 +82,7 @@ ifeq ($(TARGET_BOARD_PLATFORM), gen5)
 endif
 
 # Enable Hibernate kernel module
-ifeq ($(filter $(TARGET_BOARD_PLATFORM), vienna),$(TARGET_BOARD_PLATFORM))
+ifeq ($(filter $(TARGET_BOARD_PLATFORM), seraph vienna),$(TARGET_BOARD_PLATFORM))
   ENABLE_HIBERNATE_TZDATA_MGR_DLKM := true
 endif
 
