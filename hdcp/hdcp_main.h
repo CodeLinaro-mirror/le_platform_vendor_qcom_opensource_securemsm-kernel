@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * Copyright (c) 2022-2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __HDCP_MAIN_H__
@@ -63,6 +63,9 @@
 #define SLEEP_QSEECOMD_WAIT_MS 100
 
 #define SLEEP_SET_HW_KEY_MS 300
+
+/* Max len of the HDCP TA Name */
+#define HDCP_FW_LEN 64
 
 /* flags set by tz in response message */
 #define HDCP_TXMTR_SUBSTATE_INIT 0
