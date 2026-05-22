@@ -2134,15 +2134,15 @@ static int tzdbg_register_qsee_log_buf(void)
 		}
 	}
 
+	g_qsee_log->log_pos.wrap = g_qsee_log->log_pos.offset = 0;
+	g_qsee_log_v2->log_pos.wrap = g_qsee_log_v2->log_pos.offset = 0;
+
 	/* Always register qsee log buffer */
 	ret = qcom_scm_register_qsee_log_buf(coh_pmem, qseelog_buf_size);
 	if (ret) {
 		pr_err("scm_call to register log buf failed, resp result =%d\n", ret);
 		goto exit;
 	}
-
-	g_qsee_log->log_pos.wrap = g_qsee_log->log_pos.offset = 0;
-	g_qsee_log_v2->log_pos.wrap = g_qsee_log_v2->log_pos.offset = 0;
 
 	return ret;
 exit:
