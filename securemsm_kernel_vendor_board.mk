@@ -18,7 +18,7 @@ ifeq ($(ENABLE_SECUREMSM_DLKM), true)
   ifeq ($(TARGET_USES_SMMU_PROXY), true)
     ENABLE_SMMU_PROXY := true
   endif #TARGET_USES_SMMU_PROXY
-  ifeq ($(filter $(TARGET_BOARD_PLATFORM), canoe vienna art hamoa sun),$(TARGET_BOARD_PLATFORM))
+  ifeq ($(filter $(TARGET_BOARD_PLATFORM), hamoa_la canoe vienna art hamoa sun),$(TARGET_BOARD_PLATFORM))
     ENABLE_TMECOM_INTF_DLKM := true
   endif
 endif #ENABLE_SECUREMSM_DLKM
@@ -110,7 +110,11 @@ ifeq ($(ENABLE_SMCINVOKE_DLKM), true)
 BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
 BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
 BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
+#Hamoa AL follows bluey rules unlike other android targets and causing a bootup issue.
+#Skip loading in first stage just for Hamoa AL to fix issue.
+ifneq ($(TARGET_BOARD_PLATFORM), hamoa)
 BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
+endif
 endif #ENABLE_SMCINVOKE_DLKM
 
 ifeq ($(ENABLE_TMECOM_INTF_DLKM), true)
