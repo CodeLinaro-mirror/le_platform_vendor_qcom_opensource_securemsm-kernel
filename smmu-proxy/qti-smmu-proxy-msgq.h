@@ -6,7 +6,6 @@
 #define SMMU_PROXY_MSGQ_H
 
 #include <linux/gunyah/gh_rm_drv.h>
-#include <linux/gunyah/gh_rm_drv_oot.h>
 
 
 /**

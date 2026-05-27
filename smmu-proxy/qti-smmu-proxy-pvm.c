@@ -74,7 +74,7 @@ int smmu_proxy_unmap(void *data)
 	 */
 	retry_cnt = GH_MSGQ_RECV_RETRY_CNT;
 	do {
-		ret = gh_msgq_recv(msgq_hdl, buf, sizeof(*resp), &size, 0);
+		ret = gh_msgq_recv_killable(msgq_hdl, buf, sizeof(*resp), &size, 0);
 		if (ret >= 0)
 			break;
 
@@ -166,7 +166,7 @@ int smmu_proxy_switch_sid(struct device *client_dev, u32 op)
 	}
 
 	/*
-	 * No need to validate size -  gh_msgq_recv() ensures that sizeof(*resp) <
+	 * No need to validate size -  gh_msgq_recv_killable() ensures that sizeof(*resp) <
 	 * GH_MSGQ_MAX_MSG_SIZE_BYTES
 	 */
 	retry_cnt = GH_MSGQ_RECV_RETRY_CNT;
@@ -306,7 +306,7 @@ int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova,
 	resp = buf;
 	flags = 0;
 	do {
-		ret = gh_msgq_recv(msgq_hdl, buf, sizeof(*resp), &size, flags);
+		ret = gh_msgq_recv_killable(msgq_hdl, buf, sizeof(*resp), &size, flags);
 		if (ret >= 0) {
 			if (size != sizeof(struct smmu_proxy_map_resp) || resp == NULL) {
 				pr_err_ratelimited("%s: Map call failed with invalid response: %d\n",
