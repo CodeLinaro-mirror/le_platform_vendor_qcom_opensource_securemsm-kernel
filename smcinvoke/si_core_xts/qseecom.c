@@ -273,6 +273,7 @@ EXPORT_SYMBOL_GPL(qseecom_process_listener_from_smcinvoke);
 #endif /* CONFIG_QSEECOM_PROXY */
 #endif /* CONFIG_QSEECOM_COMPAT */
 
+char *firmware_request_from_smcinvoke(const char *appname, size_t *fw_size, struct qtee_shm *shm);
 char *firmware_request_from_smcinvoke(const char *appname, size_t *fw_size, struct qtee_shm *shm)
 {
 	int rc = 0;
@@ -884,6 +885,7 @@ EXPORT_SYMBOL_GPL(qseecom_process_listener_from_smcinvoke);
 #endif /* CONFIG_QSEECOM_PROXY */
 #endif /* CONFIG_QSEECOM_COMPAT */
 
+char *firmware_request_from_smcinvoke(const char *appname, size_t *fw_size, struct qtee_shm *shm);
 char *firmware_request_from_smcinvoke(const char *appname, size_t *fw_size, struct qtee_shm *shm)
 {
 	int rc = 0;
