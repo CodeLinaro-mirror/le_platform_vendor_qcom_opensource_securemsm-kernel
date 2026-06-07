@@ -3,7 +3,7 @@
  * QTI Crypto Engine driver API
  *
  * Copyright (c) 2010-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2024-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #ifndef __CRYPTO_MSM_QCE_H
@@ -158,6 +158,8 @@ struct ce_hw_support {
 	unsigned int ce_device;
 	unsigned int ce_hw_instance;
 	unsigned int max_request;
+	unsigned int offload_ops_mask;
+	bool key_index_mode;
 };
 
 /* Sha operation parameters */
