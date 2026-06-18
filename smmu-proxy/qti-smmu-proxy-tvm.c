@@ -467,14 +467,14 @@ static void smmu_proxy_process_msg(void *buf, size_t size)
 		return;
 
 handle_err:
-	resp = kzalloc(sizeof(resp), GFP_KERNEL);
+	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
 	if (!resp) {
 		pr_err("%s: Failed to allocate memory for response\n", __func__);
 		goto pm_release;
 	}
 
 	resp->msg_type = SMMU_PROXY_ERR_RESP;
-	resp->msg_size = sizeof(resp);
+	resp->msg_size = sizeof(*resp);
 	resp->ret = ret;
 
 	ret = gh_msgq_send(msgq_hdl, resp, resp->msg_size, 0);
