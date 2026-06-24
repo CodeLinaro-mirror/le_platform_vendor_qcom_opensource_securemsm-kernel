@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 /*
- * Copyright (c) 2023 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #ifndef __QTI_SMMU_PROXY_UAPI_H_
 #define __QTI_SMMU_PROXY_UAPI_H_
@@ -12,7 +12,7 @@
 #define QTI_SMMU_PROXY_EVA_CB 2
 #define QTI_SMMU_PROXY_VIDEO_C2PA_NON_PIXEL_CB 4
 #define QTI_SMMU_PROXY_VIDEO_C2PA_PIXEL_CB 5
-#define QTI_SMMU_PROXY_VIDEO_BITSTREAM_CB 6
+#define QTI_SMMU_PROXY_VIDEO_C2PA_BITSTREAM_CB 6
 
 #define QTI_SMMU_PROXY_IOC_BASE 0x55
 

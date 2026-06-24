@@ -76,6 +76,16 @@ ddk_headers(
 )
 
 ddk_headers(
+    name = "hibernate_tzdata_mgr_headers",
+    hdrs = [
+        "include/linux/hibernate_tzdata_mgr.h",
+    ],
+    includes = [
+        "include",
+    ],
+)
+
+ddk_headers(
     name = "qcedev_local_headers",
     hdrs = glob([
         "include/uapi/linux/*.h",

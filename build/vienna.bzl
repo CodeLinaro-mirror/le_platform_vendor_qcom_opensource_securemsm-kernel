@@ -18,6 +18,7 @@ def define_vienna():
             "hdcp2p2_test",
             "si_core_test",
             "tornado_mod",
+            "hibernate_tzdata_mgr_dlkm",
          ],
          extra_options = [
             "CONFIG_QCOM_SMCINVOKE",
@@ -25,5 +26,6 @@ def define_vienna():
             "CONFIG_QCOM_SI_CORE",
             "CONFIG_MSM_TMECOM_QMP",
             "CONFIG_QCOM_SI_CORE_TEST",
+            "CONFIG_HIBERNATE_TZDATA_MGR",
          ],
      )
