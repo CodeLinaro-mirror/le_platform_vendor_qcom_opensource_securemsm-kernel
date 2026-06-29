@@ -3000,18 +3000,25 @@ static void qcedev_remove(struct platform_device *pdev)
 #endif
 {
 	struct qcedev_control *podev;
+	int ret = 0;
 
 	podev = platform_get_drvdata(pdev);
 	if (!podev)
 		return QCEDEV_REMOVE_RETURN_VAL;
 
 	qcedev_ce_high_bw_req(podev, true);
-	if (podev->qce)
+	if (podev->qce) {
 		qce_close(podev->qce);
-	qcedev_ce_high_bw_req(podev, false);
+		podev->qce = NULL; /* prevent use-after-free */
+	}
 
-	if (podev->icc_path)
+	/* qce_close() already tore down BAM/SPS and disabled clocks. */
+	if (podev->icc_path) {
+		ret = icc_set_bw(podev->icc_path, 0, 0);
+		if (ret)
+			pr_err("%s: icc_set_bw failed, ret = %d\n", __func__, ret);
 		icc_put(podev->icc_path);
+	}
 	tasklet_kill(&podev->done_tasklet);
 
 	cdev_del(&podev->cdev);
