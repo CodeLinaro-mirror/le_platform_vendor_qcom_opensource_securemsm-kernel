@@ -1924,11 +1924,6 @@ static void process_piggyback_cb_data(uint8_t *outbuf, size_t buf_len)
 	}
 
 	msg = (void *) outbuf;
-	if ((buf_len < msg->args[0].b.offset) ||
-		(buf_len - msg->args[0].b.offset < msg->args[0].b.size)) {
-		pr_err("%s: invalid scenario\n", __func__);
-		return;
-	}
 
 	FOR_ARGS(i, msg->hdr.counts, BI)
 	{
@@ -1953,6 +1948,11 @@ static void process_piggyback_cb_data(uint8_t *outbuf, size_t buf_len)
 		piggyback_offset = TZCB_BUF_OFFSET(msg);
 
 	piggyback_offset = size_align(piggyback_offset, SMCINVOKE_ARGS_ALIGN_SIZE);
+
+	if (piggyback_offset >= buf_len) {
+		pr_err("no space left for async messages!\n");
+		return;
+	}
 
 	// Jump to piggy back data offset
 	piggyback_buf = (uint8_t *)msg + piggyback_offset;
