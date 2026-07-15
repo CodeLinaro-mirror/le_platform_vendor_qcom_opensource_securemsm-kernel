@@ -136,7 +136,7 @@ out:
 
 static int smmu_proxy_unmap(void *data)
 {
-	struct dma_buf *dmabuf;
+	gh_memparcel_handle_t memparcel_hdl = (gh_memparcel_handle_t)(uintptr_t)data;
 	void *buf;
 	int ret;
 	struct smmu_proxy_unmap_req *req;
@@ -152,14 +152,7 @@ static int smmu_proxy_unmap(void *data)
 		goto out;
 	}
 	req = buf;
-
-	dmabuf = data;
-	ret = mem_buf_dma_buf_get_memparcel_hdl(dmabuf, &req->hdl);
-	if (ret) {
-		pr_err("%s: Failed to get memparcel handle rc: %d\n", __func__, ret);
-		goto free_buf;
-	}
-
+	req->hdl = memparcel_hdl;
 	req->hdr.msg_type = SMMU_PROXY_UNMAP;
 	req->hdr.msg_size = sizeof(*req);
 
@@ -328,7 +321,7 @@ static int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova
 
 	resp = buf;
 	ret = smmu_proxy_send_msg(msgq_hdl, req, req->hdr.msg_size, resp,
-				  SMMU_PROXY_MAP_RESP, &size);
+				SMMU_PROXY_MAP_RESP, &size);
 	if (ret)
 		goto free_buf;
 
@@ -338,8 +331,8 @@ static int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova
 		ret = -EINVAL;
 		goto free_buf;
 	}
-
-	ret = mem_buf_dma_buf_set_destructor(dmabuf, smmu_proxy_unmap, dmabuf);
+	ret = mem_buf_dma_buf_set_destructor_smmu_proxy(dmabuf, smmu_proxy_unmap,
+							(void *)(uintptr_t)req->hdl);
 	if (ret) {
 		pr_err_ratelimited("%s: Failed to set vmperm destructor, rc: %d\n",
 				   __func__, ret);
