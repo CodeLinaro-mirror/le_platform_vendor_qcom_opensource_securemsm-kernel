@@ -124,7 +124,7 @@ ifeq ($(TARGET_SUPPORTS_WEAR_OS), true)
 endif #TARGET_SUPPORTS_WEAR_OS
 
 # Enable Hibernate kernel module
-ifeq ($(filter $(TARGET_BOARD_PLATFORM), vienna),$(TARGET_BOARD_PLATFORM))
+ifeq ($(filter $(TARGET_BOARD_PLATFORM), seraph vienna),$(TARGET_BOARD_PLATFORM))
   ENABLE_HIBERNATE_TZDATA_MGR := true
 endif
 

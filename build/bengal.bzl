@@ -12,6 +12,8 @@ def define_bengal():
             "qcedev-mod_dlkm",
             "qrng_dlkm",
             "qcrypto-msm_dlkm",
+	    "seccam_test_driver",
+	    "smmu_proxy_dlkm",
             "tmecom-intf_dlkm",
             "hdcp2p2_test",
             "si_core_test",

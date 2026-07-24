@@ -91,7 +91,7 @@ ifeq ($(enable_qcedev_fe),y)
     LINUXINCLUDE += -include $(SSG_MODULE_ROOT)/config/sec-kernel_defconfig_qcedev_fe.h
 
     obj-$(CONFIG_QCEDEV_FE) += qcedev_fe_dlkm.o
-    qcedev_fe_dlkm-objs := qcedev_fe/qcedev_fe.o qcedev_fe/qcedev_smmu.o
+    qcedev_fe_dlkm-objs := qcedev_fe/qcedev_fe.o qcedev_fe/qcedev_fe_virt.o
 endif
 
 
