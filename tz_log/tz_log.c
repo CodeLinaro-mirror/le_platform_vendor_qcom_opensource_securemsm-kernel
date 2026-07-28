@@ -789,10 +789,27 @@ static int _disp_tz_interrupt_stats(void)
 	return len;
 }
 
+static bool is_tz_log_ring_valid(uint32_t ring_off, uint32_t ring_len,
+		uint32_t buf_size)
+{
+	/* Add size sanity check so that ring buffer stays within diag_buf */
+	if (ring_off >= buf_size ||
+			ring_len > buf_size - ring_off) {
+		pr_err("%s: invalid ring_off(0x%x)/ring_len(0x%x) for buf_size(0x%x)\n",
+			__func__, ring_off, ring_len, buf_size);
+		return false;
+	}
+
+	return true;
+}
+
 static int _disp_tz_log_stats_legacy(int tz_id)
 {
 	int len = 0;
 	unsigned char *ptr;
+
+	if (!is_tz_log_ring_valid(tzdbg.diag_buf->ring_off, 0, debug_rw_buf_size))
+		return 0;
 
 	ptr = (unsigned char *)tzdbg.diag_buf +
 					tzdbg.diag_buf->ring_off;
@@ -1550,6 +1567,10 @@ static int _disp_tz_log_stats(size_t count, bool check_log_state)
 	struct tzdbg_log_v2_t *log_v2_ptr;
 	struct tzdbg_log_t *log_ptr;
 
+	if (!is_tz_log_ring_valid(tzdbg.diag_buf->ring_off, tzdbg.diag_buf->ring_len,
+			debug_rw_buf_size))
+		return 0;
+
 	log_ptr = (struct tzdbg_log_t *)((unsigned char *)tzdbg.diag_buf +
 			tzdbg.diag_buf->ring_off -
 			offsetof(struct tzdbg_log_t, log_buf));
@@ -1581,6 +1602,10 @@ static int _disp_tz_log_stats_2nd(struct clients_info_t *clients_info,
 {
 	struct tzdbg_log_v2_t *log_v2_ptr;
 	struct tzdbg_log_t *log_ptr;
+
+	if (!is_tz_log_ring_valid(tzdbg.diag_buf->ring_off, tzdbg.diag_buf->ring_len,
+			debug_rw_buf_size))
+		return 0;
 
 	log_ptr = (struct tzdbg_log_t *)((unsigned char *)tzdbg.diag_buf +
 			tzdbg.diag_buf->ring_off -
@@ -1615,6 +1640,10 @@ static int _disp_hyp_log_stats(size_t count)
 	static struct hypdbg_log_pos_t log_start = {0};
 	uint8_t *log_ptr;
 	uint32_t log_len;
+
+	if (!is_tz_log_ring_valid(tzdbg.hyp_diag_buf->ring_off, 0,
+			tzdbg.hyp_debug_rw_buf_size))
+		return 0;
 
 	log_ptr = (uint8_t *)((unsigned char *)tzdbg.hyp_diag_buf +
 				tzdbg.hyp_diag_buf->ring_off);
