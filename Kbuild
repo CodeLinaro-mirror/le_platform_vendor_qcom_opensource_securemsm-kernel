@@ -1,3 +1,8 @@
+ifeq ($(TARGET_MACHINE), pebble)
+LINUXINCLUDE := $(SOCINCLUDE) \
+                $(LINUXINCLUDE)
+endif
+
 LINUXINCLUDE += -I$(SSG_MODULE_ROOT)/ \
                 -I$(SSG_MODULE_ROOT)/linux/ \
                 -I$(SSG_MODULE_ROOT)/include/linux/ \
@@ -54,8 +59,10 @@ qcedev-mod_dlkm-$(CONFIG_COMPAT) += crypto-qti/compat_qcedev.o
 obj-$(CONFIG_CRYPTO_DEV_QCRYPTO) += qcrypto-msm_dlkm.o
 qcrypto-msm_dlkm-objs := crypto-qti/qcrypto.o
 
+ifneq ($(TARGET_MACHINE), pebble)
 obj-$(CONFIG_HDCP_QSEECOM) += hdcp_qseecom_dlkm.o
 hdcp_qseecom_dlkm-objs := hdcp/hdcp_main.o hdcp/hdcp_smcinvoke.o hdcp/hdcp_qseecom.o
+endif
 
 obj-$(CONFIG_HW_RANDOM_MSM_LEGACY) += qrng_dlkm.o
 qrng_dlkm-objs := qrng/msm_rng.o
@@ -72,6 +79,10 @@ ifneq (, $(filter y, $(ARCH_QTI_VM) $(CONFIG_ARCH_PINEAPPLE) $(CONFIG_ARCH_SUN) 
     smmu_proxy_dlkm-objs += smmu-proxy/qti-smmu-proxy-tvm.o
     endif
 endif
+
+obj-m += tmecom-intf_dlkm.o
+tmecom-intf_dlkm-y := tmecom/tmelog.o tmecom/tmecom.o
+tmecom-intf_dlkm-$(CONFIG_MSM_TMECOM_QMP) += tmecom/tmecom_fuse_rw.o
 
 #Enable QCE Dev Frontend if CONFIG_QTI_QUIN_GVM (HQX) is set to y
 ifeq ($(CONFIG_QTI_QUIN_GVM),y)
