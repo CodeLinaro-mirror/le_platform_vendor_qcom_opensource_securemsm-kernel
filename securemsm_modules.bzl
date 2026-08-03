@@ -156,9 +156,15 @@ register_securemsm_module(
         "tmelog.c",
         "tmecom.c",
         "tmecom.h",
-	"tmecom_fuse_rw.c",
-	"tmecom_fuse_rw.h",
     ],
+    config_srcs = {
+        "CONFIG_MSM_TMECOM_QMP": {
+            True: [
+                "tmecom_fuse_rw.c",
+                "tmecom_fuse_rw.h",
+            ],
+        },
+    },
 )
 
 register_securemsm_module(

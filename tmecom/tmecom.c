@@ -16,7 +16,6 @@
 #include <linux/uaccess.h>
 #include <linux/mailbox_controller.h>
 #include "linux/tmecom_ioctl.h"
-#include "tmecom_fuse_rw.h"
 #include <linux/version.h>
 
 #include "tmecom.h"
@@ -25,6 +24,7 @@
 #include <linux/fs.h>
 
 #if IS_ENABLED(CONFIG_MSM_TMECOM_QMP)
+#include "tmecom_fuse_rw.h"
 #if IS_ENABLED(CONFIG_MSM_QMP)
 #define TMEDEV_NAME "tmecom"
 static dev_t tme_devno;
