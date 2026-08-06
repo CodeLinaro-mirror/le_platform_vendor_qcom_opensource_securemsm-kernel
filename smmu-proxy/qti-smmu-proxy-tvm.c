@@ -443,6 +443,10 @@ static void smmu_proxy_process_msg(void *buf, size_t size)
 	struct smmu_proxy_resp_hdr *resp;
 	int ret = -EINVAL;
 
+	/* Keep TVM awake during message handling. */
+	if (smmu_ws)
+		__pm_stay_awake(smmu_ws);
+
 	if (size < sizeof(*msg_hdr) || msg_hdr->msg_size != size) {
 		pr_err("%s: message received is not of a proper size: 0x%lx, 0x:%x\n",
 				__func__, size, msg_hdr->msg_size);
@@ -465,17 +469,17 @@ static void smmu_proxy_process_msg(void *buf, size_t size)
 	}
 
 	if (!ret)
-		goto pm_release;
+		goto out;
 
 handle_err:
-	resp = kzalloc(sizeof(resp), GFP_KERNEL);
+	resp = kzalloc(sizeof(*resp), GFP_KERNEL);
 	if (!resp) {
 		pr_err("%s: Failed to allocate memory for response\n", __func__);
-		goto pm_release;
+		goto out;
 	}
 
 	resp->msg_type = SMMU_PROXY_ERR_RESP;
-	resp->msg_size = sizeof(resp);
+	resp->msg_size = sizeof(*resp);
 	resp->ret = ret;
 
 	ret = gh_msgq_send(msgq_hdl, resp, resp->msg_size, 0);
@@ -485,13 +489,9 @@ handle_err:
 		pr_debug("%s: response to mapping request sent\n", __func__);
 
 	kfree(resp);
-pm_release:
-	if (smmu_ws) {
+out:
+	if (smmu_ws)
 		__pm_relax(smmu_ws);
-		wakeup_source_unregister(smmu_ws);
-		smmu_ws = NULL;
-	}
-	return;
 }
 
 static int receiver_msgq_handler(void *msgq_hdl)

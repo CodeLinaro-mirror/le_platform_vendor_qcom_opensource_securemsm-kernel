@@ -66,7 +66,6 @@ static int hibernate_pm_notifier(struct notifier_block *nb,
 	case PM_POST_RESTORE:
 		break;
 	default:
-		WARN_ONCE(1, "Invalid PM Notifier\n");
 		break;
 	}
 

@@ -1,3 +1,8 @@
+ifeq ($(TARGET_MACHINE), seraph)
+LINUXINCLUDE := $(SOCINCLUDE) \
+                $(LINUXINCLUDE)
+endif
+
 LINUXINCLUDE += -I$(SSG_MODULE_ROOT)/ \
                 -I$(SSG_MODULE_ROOT)/linux/ \
                 -I$(SSG_MODULE_ROOT)/include/linux/ \
@@ -32,13 +37,13 @@ include $(SSG_MODULE_ROOT)/config/sec-kernel_defconfig_smcinvoke.conf
 LINUXINCLUDE += -include $(SSG_MODULE_ROOT)/config/sec-kernel_defconfig_smcinvoke.h
 
 obj-$(CONFIG_QCOM_SMCINVOKE) += smcinvoke_dlkm.o
-ifneq ($(CONFIG_QCOM_SI_CORE), y)
-    smcinvoke_dlkm-objs := smcinvoke/compat/smcinvoke_kernel.o
-    smcinvoke_dlkm-objs += smcinvoke/compat/smcinvoke.o
-else
+ifneq ($(filter y m,$(CONFIG_QCOM_SI_CORE)),)
     smcinvoke_dlkm-objs := smcinvoke/si_core_xts/qseecom.o
     smcinvoke_dlkm-objs += smcinvoke/si_core_xts/smci_kernel.o
     smcinvoke_dlkm-objs += smcinvoke/si_core_xts/smci.o
+else
+    smcinvoke_dlkm-objs := smcinvoke/compat/smcinvoke_kernel.o
+    smcinvoke_dlkm-objs += smcinvoke/compat/smcinvoke.o
 endif
 
 obj-$(CONFIG_QTI_TZ_LOG) += tz_log_dlkm.o
@@ -91,7 +96,7 @@ ifeq ($(enable_qcedev_fe),y)
     LINUXINCLUDE += -include $(SSG_MODULE_ROOT)/config/sec-kernel_defconfig_qcedev_fe.h
 
     obj-$(CONFIG_QCEDEV_FE) += qcedev_fe_dlkm.o
-    qcedev_fe_dlkm-objs := qcedev_fe/qcedev_fe.o qcedev_fe/qcedev_smmu.o
+    qcedev_fe_dlkm-objs := qcedev_fe/qcedev_fe.o qcedev_fe/qcedev_fe_virt.o
 endif
 
 
