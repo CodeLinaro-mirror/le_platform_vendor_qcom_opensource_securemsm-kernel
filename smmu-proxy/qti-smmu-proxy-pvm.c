@@ -30,18 +30,120 @@ static const struct file_operations smmu_proxy_dev_fops;
  */
 static struct device *smmu_proxy_pvm_dev;
 
+/*
+ * req and resp may alias the same buffer. req_size bytes are sent
+ * first (synchronously), then the buffer is overwritten with the response.
+ * Callers must ensure the buffer is at least GH_MSGQ_MAX_MSG_SIZE_BYTES.
+ */
+static int smmu_proxy_send_msg(void *msgq_hdl, void *req, size_t req_size,
+			       void *resp, u32 rsp_msg_type, size_t *resp_size)
+{
+	size_t size = 0;
+	int ret;
+	int retry_cnt;
+	unsigned long flags = 0;
+	const struct smmu_proxy_resp_hdr *resp_hdr = resp;
+	u32 req_msg_type = ((struct smmu_proxy_msg_hdr *)req)->msg_type;
+
+	pm_stay_awake(smmu_proxy_pvm_dev);
+
+	ret = gh_msgq_send(msgq_hdl, req, req_size, 0);
+	if (ret < 0) {
+		pr_err("%s: failed to send message for request message type: %u rc: %d\n",
+		       __func__, req_msg_type, ret);
+		goto out;
+	}
+
+	/*
+	 * No need to validate size - gh_msgq_recv_killable() ensures that
+	 * size <= GH_MSGQ_MAX_MSG_SIZE_BYTES.
+	 */
+	retry_cnt = GH_MSGQ_RECV_RETRY_CNT;
+	do {
+		ret = gh_msgq_recv_killable(msgq_hdl, resp, GH_MSGQ_MAX_MSG_SIZE_BYTES,
+					    &size, flags);
+
+		/*
+		 * A non-negative return value means a message was received from
+		 * the queue. Validate the response contents before treating the
+		 * request as complete.
+		 */
+		if (ret >= 0) {
+			/*
+			 * A valid response buffer must contain a response header.
+			 * Without it, the caller cannot identify the message type
+			 * or remote VM status.
+			 */
+			if (resp_hdr == NULL) {
+				pr_err_ratelimited("%s: call failed with invalid response for msg type: %u rc: %d\n",
+						   __func__, req_msg_type, ret);
+				ret = -EINVAL;
+				goto out;
+			}
+
+			/*
+			 * The remote request returned an error for the request. Treat
+			 * this as a failed request call.
+			 */
+			if (resp_hdr->ret) {
+				pr_err_ratelimited("%s: call failed on remote VM for msg type: %u rc: %d\n",
+						   __func__, req_msg_type, resp_hdr->ret);
+				ret = -EINVAL;
+				goto out;
+			}
+
+			/*
+			 * The queue may contain stale or unrelated responses. If
+			 * the message type does not match the expected response,
+			 * switch to non-blocking receives and continue draining
+			 * until the expected response is found or retries expire.
+			 */
+			if (resp_hdr->msg_type != rsp_msg_type) {
+				pr_err("%s: received incorrect msg (type: %d) expected msg type: %u\n",
+				       __func__, resp_hdr->msg_type, rsp_msg_type);
+				flags = GH_MSGQ_NONBLOCK;
+				ret = -EINVAL;
+			} else {
+				/*
+				 * The expected response was received and passed
+				 * validation, so the request completed successfully.
+				 */
+				ret = 0;
+
+				/*
+				 * Report the actual response size to the caller so it can
+				 * verify the response payload matches the expected format.
+				 */
+				if (resp_size)
+					*resp_size = size;
+				goto out;
+			}
+		}
+
+		if (retry_cnt == 1) {
+			pr_err_ratelimited("%s: failed to receive message for type: %u rc: %d\n",
+					   __func__, req_msg_type, ret);
+			goto out;
+		}
+		pr_err_ratelimited("%s: failed to receive message for msg type: %u rc: %d, retry\n",
+				   __func__, req_msg_type, ret);
+		mdelay(DELAY_MS);
+	} while (--retry_cnt);
+out:
+	pm_relax(smmu_proxy_pvm_dev);
+	return ret;
+}
+
 static int smmu_proxy_unmap(void *data)
 {
 	struct dma_buf *dmabuf;
 	void *buf;
-	size_t size;
 	int ret;
 	struct smmu_proxy_unmap_req *req;
 	struct smmu_proxy_unmap_resp *resp;
-	int retry_cnt;
+	size_t size = 0;
 
 	mutex_lock(&sender_mutex);
-	pm_stay_awake(smmu_proxy_pvm_dev);
 
 	buf = kzalloc(GH_MSGQ_MAX_MSG_SIZE_BYTES, GFP_KERNEL);
 	if (!buf) {
@@ -61,56 +163,22 @@ static int smmu_proxy_unmap(void *data)
 	req->hdr.msg_type = SMMU_PROXY_UNMAP;
 	req->hdr.msg_size = sizeof(*req);
 
-	ret = gh_msgq_send(msgq_hdl, (void *) req, req->hdr.msg_size, 0);
-	if (ret < 0) {
-		pr_err("%s: failed to send message rc: %d hdl:0x%x\n",
-				__func__, ret, req->hdl);
-		goto free_buf;
-	}
-
-	/*
-	 * No need to validate size -  gh_msgq_recv() ensures that sizeof(*resp) <
-	 * GH_MSGQ_MAX_MSG_SIZE_BYTES
-	 */
-	retry_cnt = GH_MSGQ_RECV_RETRY_CNT;
-	do {
-		ret = gh_msgq_recv_killable(msgq_hdl, buf, sizeof(*resp), &size, 0);
-		if (ret >= 0)
-			break;
-
-		if (retry_cnt == 1) {
-			pr_err_ratelimited("%s: failed to receive message rc: %d hdl:0x%x\n",
-					__func__, ret, req->hdl);
-			goto free_buf;
-		}
-		pr_err_ratelimited("%s: failed to receive message rc: %d, retry hdl:0x%x\n",
-				__func__, ret, req->hdl);
-		mdelay(DELAY_MS);
-	} while (--retry_cnt);
-
 	resp = buf;
-	if (size != sizeof(struct smmu_proxy_unmap_resp) || resp == NULL) {
-		pr_err_ratelimited("%s: Unmap call failed with invalid response: %d\n",
-				__func__, ret);
+	ret = smmu_proxy_send_msg(msgq_hdl, req, req->hdr.msg_size, resp,
+				  SMMU_PROXY_UNMAP_RESP, &size);
+	if (ret)
+		goto free_buf;
+
+	if (size != sizeof(*resp)) {
+		pr_err_ratelimited("%s: Unmap call failed with invalid response size: %zu\n",
+				   __func__, size);
 		ret = -EINVAL;
 		goto free_buf;
-	}
-
-	if (resp->hdr.ret) {
-		ret = -EINVAL;
-		pr_err("%s: Unmap call failed on remote VM, rc: %d\n", __func__,
-		       resp->hdr.ret);
-	}
-
-	if (resp->hdr.msg_type != SMMU_PROXY_UNMAP_RESP) {
-		pr_err("%s: received incorrect msg (type: %d) for hdl:0x%x\n", __func__,
-				resp->hdr.msg_type, req->hdl);
 	}
 
 free_buf:
 	kfree(buf);
 out:
-	pm_relax(smmu_proxy_pvm_dev);
 	mutex_unlock(&sender_mutex);
 
 	return ret;
@@ -119,11 +187,11 @@ out:
 int smmu_proxy_switch_sid(struct device *client_dev, u32 op)
 {
 	void *buf;
-	size_t size;
 	int ret;
 	struct smmu_proxy_switch_sid_req *req;
 	struct smmu_proxy_switch_sid_resp *resp;
-	int retry_cnt;
+	size_t size = 0;
+	u32 req_cb_id;
 
 	mutex_lock(&sender_mutex);
 	buf = kzalloc(GH_MSGQ_MAX_MSG_SIZE_BYTES, GFP_KERNEL);
@@ -145,6 +213,7 @@ int smmu_proxy_switch_sid(struct device *client_dev, u32 op)
 			__func__, ret);
 		goto free_buf;
 	}
+	req_cb_id = req->cb_id;
 
 	switch (op) {
 	case SMMU_PROXY_SWITCH_OP_RELEASE_SID:
@@ -158,50 +227,20 @@ int smmu_proxy_switch_sid(struct device *client_dev, u32 op)
 		goto free_buf;
 	}
 
-	ret = gh_msgq_send(msgq_hdl, (void *) req, req->hdr.msg_size, 0);
-	if (ret < 0) {
-		pr_err("%s: failed to send switch message rc: %d cb_id: %d\n",
-				__func__, ret, req->cb_id);
-		goto free_buf;
-	}
-
-	/*
-	 * No need to validate size -  gh_msgq_recv_killable() ensures that sizeof(*resp) <
-	 * GH_MSGQ_MAX_MSG_SIZE_BYTES
-	 */
-	retry_cnt = GH_MSGQ_RECV_RETRY_CNT;
-	do {
-		ret = gh_msgq_recv(msgq_hdl, buf, sizeof(*resp), &size, 0);
-		if (ret >= 0)
-			break;
-
-		if (retry_cnt == 1) {
-			pr_err_ratelimited("%s: failed to receive message rc: %d cb_id: %d\n",
-					__func__, ret, req->cb_id);
-			goto free_buf;
-		}
-		pr_err_ratelimited("%s: failed to receive message rc: %d, retry cb_id: %d\n",
-				__func__, ret, req->cb_id);
-		mdelay(DELAY_MS);
-	} while (--retry_cnt);
-
 	resp = buf;
-	if (size != sizeof(struct smmu_proxy_switch_sid_resp) || resp == NULL) {
-		pr_err_ratelimited("%s: Switch call failed with invalid response: %d\n",
-				__func__, ret);
-		ret = -EINVAL;
+	ret = smmu_proxy_send_msg(msgq_hdl, req, req->hdr.msg_size, resp,
+				  SMMU_PROXY_SWITCH_SID_RESP, &size);
+	if (ret) {
+		pr_err_ratelimited("%s: SID Switch call failed for cb_id: %u rc: %d\n",
+				   __func__, req_cb_id, ret);
 		goto free_buf;
 	}
 
-	if (resp->hdr.ret) {
-		pr_err("%s: Switch call failed on remote VM, rc: %d\n", __func__,
-		       resp->hdr.ret);
+	if (size != sizeof(*resp)) {
+		pr_err_ratelimited("%s: SID Switch call failed for cb_id: %u with invalid response size: %zu\n",
+				   __func__, req_cb_id, size);
 		ret = -EINVAL;
-	}
-
-	if (resp->hdr.msg_type != SMMU_PROXY_SWITCH_SID_RESP) {
-		pr_err("%s: received incorrect msg (type: %d) for cb_id: %d\n", __func__,
-				resp->hdr.msg_type, req->cb_id);
+		goto free_buf;
 	}
 
 free_buf:
@@ -217,7 +256,6 @@ static int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova
 		   struct dma_buf *dmabuf)
 {
 	void *buf;
-	size_t size;
 	int ret = 0;
 	int n_acl_entries, i;
 	int vmids[2] = { VMID_TVM, VMID_OEMVM };
@@ -226,8 +264,7 @@ static int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova
 	struct mem_buf_lend_kernel_arg arg = {0};
 	struct smmu_proxy_map_req *req;
 	struct smmu_proxy_map_resp *resp;
-	int retry_cnt;
-	unsigned long flags;
+	size_t size = 0;
 
 	ret = smmu_proxy_get_csf_version(&csf_version);
 	if (ret) {
@@ -243,13 +280,11 @@ static int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova
 	n_acl_entries = csf_version.min_ver == 1 ? 2 : 1;
 
 	mutex_lock(&sender_mutex);
-	pm_stay_awake(smmu_proxy_pvm_dev);
 
 	buf = kzalloc(GH_MSGQ_MAX_MSG_SIZE_BYTES, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;
 		pr_err("%s: Failed to allocate memory!\n", __func__);
-		pm_relax(smmu_proxy_pvm_dev);
 		goto out;
 	}
 
@@ -291,54 +326,18 @@ static int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova
 	req->hdr.msg_size = offsetof(struct smmu_proxy_map_req,
 			acl_desc.acl_entries[n_acl_entries]);
 
-	ret = gh_msgq_send(msgq_hdl, (void *) req, req->hdr.msg_size, 0);
-	if (ret < 0) {
-		pr_err("%s: failed to send message rc: %d hdl:0x%x\n",
-				__func__, ret, req->hdl);
+	resp = buf;
+	ret = smmu_proxy_send_msg(msgq_hdl, req, req->hdr.msg_size, resp,
+				  SMMU_PROXY_MAP_RESP, &size);
+	if (ret)
+		goto free_buf;
+
+	if (size != sizeof(*resp)) {
+		pr_err_ratelimited("%s: Map call failed with invalid response size: %zu\n",
+				   __func__, size);
+		ret = -EINVAL;
 		goto free_buf;
 	}
-
-	/*
-	 * No need to validate size -  gh_msgq_recv() ensures that sizeof(*resp) <
-	 * GH_MSGQ_MAX_MSG_SIZE_BYTES
-	 */
-	retry_cnt = GH_MSGQ_RECV_RETRY_CNT;
-	resp = buf;
-	flags = 0;
-	do {
-		ret = gh_msgq_recv_killable(msgq_hdl, buf, sizeof(*resp), &size, flags);
-		if (ret >= 0) {
-			if (size != sizeof(struct smmu_proxy_map_resp) || resp == NULL) {
-				pr_err_ratelimited("%s: Map call failed with invalid response: %d\n",
-						__func__, ret);
-				ret = -EINVAL;
-				goto free_buf;
-			}
-
-			if (resp->hdr.ret) {
-				pr_err_ratelimited("%s: Map call failed on remote VM, rc: %d\n",
-						__func__, resp->hdr.ret);
-				ret = -EINVAL;
-				goto free_buf;
-			}
-
-			if (resp->hdr.msg_type != SMMU_PROXY_MAP_RESP) {
-				pr_err("%s: received incorrect msg (type: %d) for hdl:0x%x\n",
-						__func__, resp->hdr.msg_type, req->hdl);
-				flags = GH_MSGQ_NONBLOCK;
-			} else
-				break;
-		}
-
-		if (retry_cnt == 1) {
-			pr_err_ratelimited("%s: failed to receive message rc: %d hdl:0x%x\n",
-					__func__, ret, req->hdl);
-			goto free_buf;
-		}
-		pr_err_ratelimited("%s: failed to receive message rc: %d, retry hdl:0x%x\n",
-				__func__, ret, req->hdl);
-		mdelay(DELAY_MS);
-	} while (--retry_cnt);
 
 	ret = mem_buf_dma_buf_set_destructor(dmabuf, smmu_proxy_unmap, dmabuf);
 	if (ret) {
@@ -359,7 +358,6 @@ static int smmu_proxy_map(struct device *client_dev, struct sg_table *proxy_iova
 free_buf:
 	kfree(buf);
 out:
-	pm_relax(smmu_proxy_pvm_dev);
 	mutex_unlock(&sender_mutex);
 
 	return ret;
