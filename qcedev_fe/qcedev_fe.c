@@ -12,14 +12,15 @@
 #include <linux/cdev.h>
 #include <linux/kthread.h>
 #include <linux/completion.h>
-#include "qcedev_smmu.h"
 #include "qcedev_fe.h"
+#include "qcedev_fe_virt.h"
 
 #define QCE_FE_FIRST_MINOR 0
 #define QCE_FE_MINOR_CNT   1
 #define QCEDEV_MAX_BUFFERS      16
 #define QCE_MM_HAB_ID  MM_GPCE_1
 #define HAB_OPEN_WAIT_TIMEOUT_MS (300)
+#define MAX_CEHW_REQ_TRANSFER_SIZE (128*32*1024)
 
 static struct cdev cdev_qce_fe;
 static dev_t dev_qce_fe;
@@ -29,6 +30,234 @@ static struct completion create_hab_channel_done;
 struct qce_fe_drv_hab_handles   *drv_handles;
 
 static int qce_fe_hab_open(uint32_t *handle);
+
+/**
+ * qcedev_fe_convert_cipher_req() - Convert qcedev cipher request to GPCE format
+ * @ext_req: Input extended cipher request from userspace
+ * @gpce_req: Output GPCE cipher request for backend
+ *
+ * This function transforms the qcedev_extended_cipher_req structure to
+ * gpce_cipher_req format that the backend VM expects.
+ */
+static void qcedev_fe_convert_cipher_req(
+		const struct qcedev_extended_cipher_req *ext_req,
+		struct gpce_cipher_req *gpce_req)
+{
+	int i = 0;
+
+	/* Copy buffer information */
+	for (i = 0; i < ext_req->vbuf.entries; i++) {
+		gpce_req->vbuf.src[i].vaddr = (u64)ext_req->vbuf.src[i].vaddr;
+		gpce_req->vbuf.src[i].len = ext_req->vbuf.src[i].len;
+		gpce_req->vbuf.dst[i].vaddr = (u64)ext_req->vbuf.dst[i].vaddr;
+		gpce_req->vbuf.dst[i].len = ext_req->vbuf.dst[i].len;
+	}
+
+	/* Copy cipher parameters */
+	gpce_req->entries = ext_req->vbuf.entries;
+	gpce_req->data_len = ext_req->data_len;
+	gpce_req->in_place_op = ext_req->in_place_op;
+	gpce_req->encklen = ext_req->key.key_length;
+	memcpy(gpce_req->iv, ext_req->iv, sizeof(gpce_req->iv));
+	gpce_req->ivlen = ext_req->iv_len;
+	gpce_req->iv_ctr_size = ext_req->iv_ctr_size;
+	gpce_req->block_offset = (u8)ext_req->byte_offset;
+	gpce_req->is_pattern_valid = ext_req->is_pattern_valid;
+	gpce_req->is_copy_op = ext_req->is_copy_op;
+	gpce_req->encrypt = ext_req->encrypt;
+	memcpy(gpce_req->mac, ext_req->mac, sizeof(gpce_req->mac));
+	gpce_req->mac_len = ext_req->mac_len;
+
+	/* Handle key based on key type */
+	if (ext_req->key.key_type == QCEDEV_KEY_TYPE_SOFTWARE_KEY) {
+		memcpy(gpce_req->key, ext_req->key.software_key,
+			sizeof(gpce_req->key));
+		gpce_req->key_size = ext_req->key.key_length;
+	} else if (ext_req->key.key_type == QCEDEV_KEY_TYPE_DRM_KEY_INDEX ||
+		   ext_req->key.key_type == QCEDEV_KEY_TYPE_GP_KEY_INDEX) {
+		gpce_req->key_index = ext_req->key.key_index;
+	}
+
+	/* Copy pattern information */
+	gpce_req->pattern_info.patt_sz = ext_req->pattern_info.patt_sz;
+	gpce_req->pattern_info.proc_data_sz = ext_req->pattern_info.proc_data_sz;
+	gpce_req->pattern_info.patt_offset = ext_req->pattern_info.patt_offset;
+
+	/* Copy algorithm and mode information */
+	gpce_req->alg = ext_req->alg;
+	gpce_req->mode = ext_req->mode;
+	gpce_req->op = ext_req->op;
+	gpce_req->err = ext_req->err;
+
+	/* Set secure buffer flags based on operation type */
+	if (ext_req->op == QCEDEV_OFFLOAD_HLOS_CPB) {
+		/* Non-secure to secure: input from HLOS (non-secure), output to CPB (secure) */
+		gpce_req->is_secure_in = 0;   /* false - input is non-secure */
+		gpce_req->is_secure_out = 1;  /* true - output is secure */
+	}
+}
+
+/**
+ * qcedev_fe_process_cipher_rsp() - Process cipher response from backend
+ * @ext_req: Extended cipher request to update with response data
+ * @gpce_rsp: GPCE cipher response from backend
+ * @hab_err: HAB communication error code (0 if successful)
+ *
+ * This function updates the extended cipher request with the response
+ * from the backend, including updated IV and error status.
+ */
+static void qcedev_fe_process_cipher_rsp(
+		struct qcedev_extended_cipher_req *ext_req,
+		const struct gpce_cipher_rsp *gpce_rsp,
+		int hab_err)
+{
+	if ( (gpce_rsp->status == 0) && (hab_err != 0) ) {
+		/* HAB communication error */
+		ext_req->err = QCEDEV_OFFLOAD_GENERIC_ERROR;
+		pr_err("%s: HAB communication failed - %d\n", __func__, hab_err);
+		return;
+	}
+
+	/* Validate ivlen before copying to prevent buffer overread/overwrite */
+	if (gpce_rsp->ivlen > sizeof(ext_req->iv)) {
+		pr_err("%s: invalid ivlen %u from backend\n", __func__, gpce_rsp->ivlen);
+		ext_req->err = QCEDEV_OFFLOAD_GENERIC_ERROR;
+		return;
+	}
+
+	/* Backend processed the request successfully */
+	/* Copy updated IV and ivlen from response */
+	ext_req->iv_len = gpce_rsp->ivlen;
+	memcpy(ext_req->iv, gpce_rsp->iv, ext_req->iv_len);
+
+	/* Map backend status to qcedev error code */
+	if (gpce_rsp->status != 0) {
+		ext_req->err = (enum qcedev_offload_err_enum)gpce_rsp->status;
+		pr_err("%s: backend reported error status: %d\n",
+			__func__, gpce_rsp->status);
+	} else {
+		ext_req->err = QCEDEV_OFFLOAD_NO_ERROR;
+	}
+}
+
+/**
+ * qcedev_ext_cipher_ioctl() - Handle extended cipher operation IOCTL
+ * @handle: QCE device handle
+ * @arg: User space argument pointer
+ *
+ * This function processes all entries in a single ioctl call with chunking
+ * for large buffers, matching the behavior of the original qcedev driver.
+ *
+ * Return: 0 on success, negative error code on failure
+ */
+static int qcedev_ext_cipher_ioctl(struct qcedev_fe_handle *handle,
+				   unsigned long arg)
+{
+	struct qcedev_extended_cipher_req *ext_cipher_req = NULL;
+	struct qcedev_extended_cipher_req *temp_req = NULL;
+	struct gpce_cipher_req gpce_req = {0};
+	struct gpce_cipher_rsp gpce_rsp = {0};
+	int err = 0;
+	int i;
+	size_t max_data_xfer = MAX_CEHW_REQ_TRANSFER_SIZE;
+
+	/* Allocate memory for requests to avoid stack overflow */
+	ext_cipher_req = kzalloc(sizeof(*ext_cipher_req), GFP_KERNEL);
+	if (!ext_cipher_req) {
+		pr_err("%s: failed to allocate ext_cipher_req\n", __func__);
+		return -ENOMEM;
+	}
+
+	temp_req = kzalloc(sizeof(*temp_req), GFP_KERNEL);
+	if (!temp_req) {
+		pr_err("%s: failed to allocate temp_req\n", __func__);
+		err = -ENOMEM;
+		goto free_ext_req;
+	}
+
+	/* Copy request from userspace */
+	if (copy_from_user(ext_cipher_req, (void __user *)arg,
+			   sizeof(*ext_cipher_req))) {
+		pr_err("%s: copy_from_user failed\n", __func__);
+		err = -EFAULT;
+		goto free_temp_req;
+	}
+
+	/* Validate request parameters */
+	if (ext_cipher_req->vbuf.entries > QCEDEV_MAX_BUFFERS) {
+		pr_err("%s: entries = %d exceeds max value\n",
+			__func__, ext_cipher_req->vbuf.entries);
+		err = -EINVAL;
+		goto free_temp_req;
+	}
+
+	pr_info("qce_fe: Processing %d entries in single ioctl\n", ext_cipher_req->vbuf.entries);
+
+	/* Process ALL entries in this ioctl (like original qcedev) */
+	for (i = 0; i < ext_cipher_req->vbuf.entries; i++) {
+		size_t pending_data_len = ext_cipher_req->vbuf.src[i].len;
+		__u8 *user_src = ext_cipher_req->vbuf.src[i].vaddr;
+		__u8 *user_dst = ext_cipher_req->vbuf.dst[i].vaddr;
+		u8 byte_offset = (i == 0) ? ext_cipher_req->byte_offset : 0;
+
+		if (byte_offset)
+			max_data_xfer = MAX_CEHW_REQ_TRANSFER_SIZE - byte_offset;
+
+		/* Process this entry in chunks if needed */
+		while (pending_data_len > 0) {
+			size_t transfer_len = (pending_data_len < max_data_xfer) ?
+					      pending_data_len : max_data_xfer;
+
+			/* Setup temp request for this chunk */
+			memcpy(temp_req, ext_cipher_req, sizeof(*temp_req));
+			temp_req->vbuf.entries = 1;
+			temp_req->vbuf.src[0].vaddr = user_src;
+			temp_req->vbuf.src[0].len = transfer_len;
+			temp_req->vbuf.dst[0].vaddr = user_dst;
+			temp_req->vbuf.dst[0].len = transfer_len;
+			temp_req->data_len = transfer_len;
+			temp_req->byte_offset = byte_offset;
+
+			/* Convert request to backend format */
+			qcedev_fe_convert_cipher_req(temp_req, &gpce_req);
+
+			/* Send request to backend via HAB channel */
+			err = qcedev_fe_send_cipher_req(&gpce_req, &gpce_rsp, drv_handles);
+
+			/* Process response and update request structure */
+			qcedev_fe_process_cipher_rsp(ext_cipher_req, &gpce_rsp, err);
+
+			if (err || ext_cipher_req->err != QCEDEV_OFFLOAD_NO_ERROR) {
+				pr_err("%s: Failed for entry %d, err=%d, req_err=%d\n",
+					__func__, i, err, ext_cipher_req->err);
+				goto copy_to_user;
+			}
+
+			/* Update for next chunk */
+			pending_data_len -= transfer_len;
+			user_src += transfer_len;
+			user_dst += transfer_len;
+			byte_offset = 0; /* Only first chunk has byte offset */
+			max_data_xfer = MAX_CEHW_REQ_TRANSFER_SIZE;
+		}
+	}
+
+copy_to_user:
+	/* Copy response back to userspace */
+	if (copy_to_user((void __user *)arg, ext_cipher_req,
+			 sizeof(*ext_cipher_req))) {
+		pr_err("%s: copy_to_user failed\n", __func__);
+		err = -EFAULT;
+	}
+
+free_temp_req:
+	kfree(temp_req);
+free_ext_req:
+	kfree(ext_cipher_req);
+
+	return err;
+}
+
 
 static int qce_fe_open(struct inode *i, struct file *f)
 {
@@ -153,6 +382,13 @@ static long gce_fe_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 			}
 			break;
 		}
+
+	case QCEDEV_IOCTL_EXT_CIPHER_OP_REQ:
+		err = qcedev_ext_cipher_ioctl(handle, arg);
+		if (err)
+			goto exit_qcedev;
+		break;
+
 	default:
 		pr_err("QCE_FE: Failed. Invalid  IOCTL cmd  0x%x\n", cmd);
 		err = -EINVAL;

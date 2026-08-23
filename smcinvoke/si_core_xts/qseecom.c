@@ -35,11 +35,16 @@ const uint32_t CQSEEComCompatAppLoader_UID = 122;
 
 #if IS_ENABLED(CONFIG_QSEECOM_COMPAT)
 
+#define SI_CORE_QSEECOMCOMPAT_TRF_TIMEOUT_MS			420000
+#define SI_CORE_QSEECOMCOMPAT_TRF_INTERVAL_MS			5
+#define Object_ERROR_BUSY					-99
+
 /* SMCI QSEECOMCOMPAT OP IDs */
-#define SI_CORE_QSEECOMCOMPAT_OP_SEND_REQUEST				0
-#define SI_CORE_QSEECOMCOMPAT_OP_LOAD_FROM_BUFFER			1
-#define SI_CORE_QSEECOMCOMPAT_OP_LOOKUP_TA				2
-#define SI_CORE_QSEECOMCOMPAT_OP_LOAD_FROM_REGION			0
+#define SI_CORE_QSEECOMCOMPAT_OP_SEND_REQUEST			0
+#define SI_CORE_QSEECOMCOMPAT_OP_LOAD_FROM_BUFFER		1
+#define SI_CORE_QSEECOMCOMPAT_OP_LOOKUP_TA			2
+#define SI_CORE_QSEECOMCOMPAT_OP_LOAD_FROM_REGION		0
+#define SI_CORE_QSEECOMCOMPAT_OP_UNLOAD				2
 
 struct qseecom_compat_context {
 	void *dev; /* in/out */
@@ -61,6 +66,37 @@ struct qsee_mo_ctx {
 char *firmware_request_from_smcinvoke(const char *appname,
 	size_t *fw_size, struct qtee_shm *shm);
 
+static int si_object_do_invoke_with_retry(struct si_object_invoke_ctx *oic,
+	struct si_object *object, unsigned long op, struct si_arg u[], int *result)
+{
+	int ret;
+	unsigned int attempts = 0;
+
+	unsigned long deadline = jiffies + msecs_to_jiffies(SI_CORE_QSEECOMCOMPAT_TRF_TIMEOUT_MS);
+
+	do {
+		ret = si_object_do_invoke(oic, object, op, u, result);
+		if (ret)
+			return ret;
+
+		if (*result != Object_ERROR_BUSY)
+			return 0;
+
+		pr_info("%s: BUSY (%d), retry #%u, op=%lu, sleep %u ms\n",
+			__func__, *result, attempts + 1, op, SI_CORE_QSEECOMCOMPAT_TRF_INTERVAL_MS);
+
+		if (time_after_eq(jiffies, deadline))
+			break;
+
+		attempts++;
+		msleep(SI_CORE_QSEECOMCOMPAT_TRF_INTERVAL_MS);
+	} while (time_before(jiffies, deadline));
+
+	pr_err("%s: timeout on BUSY (op=%lu)\n", __func__, op);
+
+	return 0;
+}
+
 static int si_core_qseecomcompat_lookup_ta(
 	struct si_object_invoke_ctx *oic,
 	struct si_object *app_loader,
@@ -81,7 +117,7 @@ static int si_core_qseecomcompat_lookup_ta(
 	args[2].type = SI_AT_OO;
 	args[3].type = SI_AT_END;
 
-	ret = si_object_do_invoke(oic, app_loader,
+	ret = si_object_do_invoke_with_retry(oic, app_loader,
 				SI_CORE_QSEECOMCOMPAT_OP_LOOKUP_TA,
 				args, &result);
 	if (ret || result) {
@@ -139,8 +175,9 @@ static int si_core_qseecomcompat_send_request(
 	args[9].o = smo4;
 	args[10].type = SI_AT_END;
 
-	ret = si_object_do_invoke(oic, app_controller,
-		SI_CORE_QSEECOMCOMPAT_OP_SEND_REQUEST, args, &result);
+	ret = si_object_do_invoke_with_retry(oic, app_controller,
+				SI_CORE_QSEECOMCOMPAT_OP_SEND_REQUEST,
+				args, &result);
 	if (ret || result) {
 		pr_err("%s failed with result %d (ret = %d).\n", __func__,
 				result, ret);
@@ -254,6 +291,28 @@ static int si_core_qseecomcompat_load_from_region(
 		return -EINVAL;
 	}
 	*app_controller = args[2].o;
+
+	return 0;
+}
+
+static int si_core_qseecomcompat_unload(
+	struct si_object_invoke_ctx *oic,
+	struct si_object *app_controller)
+{
+	int result = 0;
+	int ret = 0;
+	struct si_arg args[1] = {0};
+
+	args[0].type = SI_AT_END;
+
+	ret = si_object_do_invoke_with_retry(oic, app_controller,
+				SI_CORE_QSEECOMCOMPAT_OP_UNLOAD,
+				args, &result);
+	if (ret || result) {
+		pr_err("%s failed with result %d (ret = %d).\n", __func__,
+				result, ret);
+		return -EINVAL;
+	}
 
 	return 0;
 }
@@ -388,7 +447,9 @@ exit_free_cxt:
 
 static int __qseecom_shutdown_app(struct qseecom_handle **handle)
 {
+	int ret = 0;
 	struct qseecom_compat_context *cxt = NULL;
+	struct si_object_invoke_ctx shutdown_oic;
 
 	if ((handle == NULL) || (*handle == NULL)) {
 		pr_err("Handle is NULL\n");
@@ -396,6 +457,12 @@ static int __qseecom_shutdown_app(struct qseecom_handle **handle)
 	}
 
 	cxt = (struct qseecom_compat_context *)(*handle);
+
+	memset(&shutdown_oic, 0, sizeof(shutdown_oic));
+
+	ret = si_core_qseecomcompat_unload(&shutdown_oic, cxt->app_controller);
+	if (ret)
+		pr_warn("Unload failed with ret = %d, proceeding with cleanup\n", ret);
 
 	qtee_shmbridge_free_shm(&cxt->shm);
 	put_si_object(cxt->app_controller);

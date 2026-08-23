@@ -213,7 +213,7 @@ register_securemsm_module(
     path = QCEDEV_FE_PATH,
     srcs = [
                 "qcedev_fe.c",
-                "qcedev_smmu.c"],
+                "qcedev_fe_virt.c"],
     deps = [":qcedev_fe_local_headers"],
 )
 

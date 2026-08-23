@@ -7,42 +7,139 @@
 #include <linux/qcom-dma-mapping.h>
 #include <linux/list.h>
 #include <linux/mem-buf.h>
+#include <linux/habmm.h>
 #include <linux/slab.h>
-#include "qcedev_smmu.h"
+#include "qcedev_fe_virt.h"
 #include "soc/qcom/secure_buffer.h"
 
+/**
+ * find_free_hab_handle() - Find an available HAB handle
+ * @drv_handles: Pointer to driver HAB handles structure
+ *
+ * Return: Handle ID on success, -1 on failure
+ */
 static int find_free_hab_handle(struct qce_fe_drv_hab_handles *drv_handles)
 {
 	int handle_id = -1;
 	int i = 0;
 
 	if (drv_handles == NULL) {
-		pr_err("%s : invalid handle\n", __func__);
+		pr_err("%s: invalid handle\n", __func__);
 		return handle_id;
 	}
+
 	spin_lock(&(drv_handles->handle_lock));
-		for (i = 0; i < HAB_HANDLE_NUM; i++) {
-			if (!drv_handles->qce_fe_hab_handles[i].in_use) {
-				drv_handles->qce_fe_hab_handles[i].in_use = true;
-				handle_id = i;
-				spin_unlock(&(drv_handles->handle_lock));
-				return handle_id;
-			}
+	for (i = 0; i < HAB_HANDLE_NUM; i++) {
+		if (!drv_handles->qce_fe_hab_handles[i].in_use) {
+			drv_handles->qce_fe_hab_handles[i].in_use = true;
+			handle_id = i;
+			spin_unlock(&(drv_handles->handle_lock));
+			return handle_id;
 		}
+	}
 	spin_unlock(&(drv_handles->handle_lock));
-	pr_err("%s : there is no available hab handle\n", __func__);
+
+	pr_err("%s: no available hab handle\n", __func__);
 	return handle_id;
 }
 
-static void free_hab_handle(struct qce_fe_drv_hab_handles *drv_handles, int handle_id)
+/**
+ * free_hab_handle() - Release a HAB handle
+ * @drv_handles: Pointer to driver HAB handles structure
+ * @handle_id: Handle ID to release
+ */
+static void free_hab_handle(struct qce_fe_drv_hab_handles *drv_handles,
+		int handle_id)
 {
 	spin_lock(&(drv_handles->handle_lock));
 	drv_handles->qce_fe_hab_handles[handle_id].in_use = false;
 	spin_unlock(&(drv_handles->handle_lock));
 }
 
+int qcedev_fe_send_cipher_req(struct gpce_cipher_req *cipher_req,
+		struct gpce_cipher_rsp *cipher_rsp,
+		struct qce_fe_drv_hab_handles *drv_handles)
+{
+	int rc;
+	u32 cmd_rsp_size;
+	unsigned long delay = jiffies + (HZ / 2);
+	int handle_id = find_free_hab_handle(drv_handles);
+	u32 msm_gpce_hab_handle = 0;
+
+	if (handle_id < 0) {
+		pr_err("%s: no available hab handle\n", __func__);
+		return -ENODEV;
+	}
+
+	if (!cipher_req || !cipher_rsp) {
+		pr_err("%s: invalid input arguments\n", __func__);
+		free_hab_handle(drv_handles, handle_id);
+		return -EINVAL;
+	}
+
+	msm_gpce_hab_handle = drv_handles->qce_fe_hab_handles[handle_id].handle;
+
+	/* Set command ID */
+	cipher_req->cmd_id = MSM_GPCE_CIPHER_CMD;
+
+	/* Send cipher request to backend */
+	rc = habmm_socket_send(msm_gpce_hab_handle,
+		(void *)cipher_req, sizeof(*cipher_req), 0);
+	if (rc) {
+		pr_err("%s: habmm_socket_send failed %d\n", __func__, rc);
+		goto err;
+	}
+
+	/* Receive response from backend */
+	do {
+		cmd_rsp_size = sizeof(*cipher_rsp);
+		rc = habmm_socket_recv(msm_gpce_hab_handle,
+			(void *)cipher_rsp,
+			&cmd_rsp_size,
+			0xFFFFFFFF,
+			0);
+	} while (time_before(jiffies, delay) && (rc == -EINTR) &&
+			(cmd_rsp_size == 0));
+
+	if (rc) {
+		pr_err("%s: habmm_socket_recv failed %d\n", __func__, rc);
+		goto err;
+	}
+
+	if (cmd_rsp_size != sizeof(*cipher_rsp)) {
+		pr_err("%s: invalid size for cmd rsp %u, expected %zu\n",
+			__func__, cmd_rsp_size, sizeof(*cipher_rsp));
+		rc = -EIO;
+		goto err;
+	}
+
+	if (cipher_rsp->status) {
+		pr_err("%s: cipher command failed with status %d\n",
+			__func__, cipher_rsp->status);
+		rc = cipher_rsp->status;
+		goto err;
+	}
+
+	free_hab_handle(drv_handles, handle_id);
+	pr_debug("%s: cipher request completed successfully\n", __func__);
+	return 0;
+
+err:
+	free_hab_handle(drv_handles, handle_id);
+	return rc;
+}
+
+/**
+ * msm_gpce_ion_smmu_map() - Map DMA buffer to backend SMMU
+ * @dma_buf: DMA buffer to map
+ * @binfo: Buffer info structure to store mapping details
+ * @drv_handles: Pointer to HAB handles structure
+ *
+ * Return: 0 on success, negative error code on failure
+ */
 static int msm_gpce_ion_smmu_map(struct dma_buf *dma_buf,
-		struct qcedev_fe_reg_buf_info *binfo, struct qce_fe_drv_hab_handles *drv_handles)
+		struct qcedev_fe_reg_buf_info *binfo,
+		struct qce_fe_drv_hab_handles *drv_handles)
 {
 	int rc = -2;
 	u32 export_id;
@@ -57,18 +154,18 @@ static int msm_gpce_ion_smmu_map(struct dma_buf *dma_buf,
 	size_t len = 0;
 
 	if (handle_id < 0) {
-		pr_err("%s : there is no available hab handle\n", __func__);
+		pr_err("%s: no available hab handle\n", __func__);
 		return -ENODEV;
 	}
 	if (IS_ERR_OR_NULL(dma_buf)) {
-		pr_err("%s : Failed to get dma_buf\n", __func__);
+		pr_err("%s: Failed to get dma_buf\n", __func__);
 		dma_buf = NULL;
 		goto err;
 	}
 
 	msm_gpce_ion_hab_handle = (drv_handles->qce_fe_hab_handles[handle_id]).handle;
 	len = dma_buf->size;
-	//Check if Buffer is secure or not
+	/* Check if Buffer is secure or not */
 	is_secure = !(mem_buf_dma_buf_exclusive_owner(dma_buf));
 	/* Export the buffer to physical VM */
 	rc = habmm_export(msm_gpce_ion_hab_handle, dma_buf, len,
@@ -89,8 +186,7 @@ static int msm_gpce_ion_smmu_map(struct dma_buf *dma_buf,
 	rc = habmm_socket_send(msm_gpce_ion_hab_handle,
 		(void *)&smmu_map_cmd, sizeof(smmu_map_cmd), 0);
 	if (rc) {
-		pr_err("%s: habmm_socket_send failed %d\n",
-			__func__, rc);
+		pr_err("%s: habmm_socket_send failed %d\n", __func__, rc);
 		goto err;
 	}
 
@@ -104,8 +200,7 @@ static int msm_gpce_ion_smmu_map(struct dma_buf *dma_buf,
 	} while (time_before(jiffies, delay) && (rc == -EINTR) &&
 			(cmd_rsp_size == 0));
 	if (rc) {
-		pr_err("%s: habmm_socket_recv failed %d\n",
-			__func__, rc);
+		pr_err("%s: habmm_socket_recv failed %d\n", __func__, rc);
 		goto err;
 	}
 
@@ -117,8 +212,7 @@ static int msm_gpce_ion_smmu_map(struct dma_buf *dma_buf,
 	}
 
 	if (cmd_rsp.status) {
-		pr_err("%s: SMMU map command failed %d\n",
-			__func__, cmd_rsp.status);
+		pr_err("%s: SMMU map command failed %d\n", __func__, cmd_rsp.status);
 		rc = cmd_rsp.status;
 		goto err;
 	}
@@ -139,6 +233,13 @@ err:
 	return rc;
 }
 
+/**
+ * msm_gpce_ion_smmu_unmap() - Unmap DMA buffer from backend SMMU
+ * @dma_buffer_info: Buffer info containing mapping details
+ * @drv_handles: Pointer to HAB handles structure
+ *
+ * Return: 0 on success, negative error code on failure
+ */
 static int msm_gpce_ion_smmu_unmap(struct qcedev_fe_ion_buf_info *dma_buffer_info,
 		struct qce_fe_drv_hab_handles *drv_handles)
 {
@@ -151,7 +252,7 @@ static int msm_gpce_ion_smmu_unmap(struct qcedev_fe_ion_buf_info *dma_buffer_inf
 	u32 msm_gpce_ion_hab_handle = 0;
 
 	if (handle_id < 0) {
-		pr_err("%s : there is no available hab handle\n", __func__);
+		pr_err("%s: no available hab handle\n", __func__);
 		return -ENODEV;
 	}
 	msm_gpce_ion_hab_handle = drv_handles->qce_fe_hab_handles[handle_id].handle;
@@ -165,8 +266,7 @@ static int msm_gpce_ion_smmu_unmap(struct qcedev_fe_ion_buf_info *dma_buffer_inf
 		(void *)&smmu_unmap_cmd,
 		sizeof(smmu_unmap_cmd), 0);
 	if (rc) {
-		pr_err("%s: habmm_socket_send failed %d\n",
-			__func__, rc);
+		pr_err("%s: habmm_socket_send failed %d\n", __func__, rc);
 		goto err;
 	}
 
@@ -180,8 +280,7 @@ static int msm_gpce_ion_smmu_unmap(struct qcedev_fe_ion_buf_info *dma_buffer_inf
 	} while (time_before(jiffies, delay) &&
 			(rc == -EINTR) && (cmd_rsp_size == 0));
 	if (rc) {
-		pr_err("%s: habmm_socket_recv failed %d\n",
-			__func__, rc);
+		pr_err("%s: habmm_socket_recv failed %d\n", __func__, rc);
 		goto err;
 	}
 
@@ -225,7 +324,7 @@ int qcedev_check_and_map_buffer(void *handle,
 	unsigned long mapped_size = 0;
 
 	if (!handle || !vaddr || fd < 0 || offset >= fd_size) {
-		pr_err("%s: err: invalid input arguments\n", __func__);
+		pr_err("%s: invalid input arguments\n", __func__);
 		return -EINVAL;
 	}
 	/* Check if the buffer fd is already mapped */
@@ -243,12 +342,10 @@ int qcedev_check_and_map_buffer(void *handle,
 
 	/* If buffer fd is not mapped then create a fresh mapping */
 	if (!found) {
-		pr_debug("%s: info: ion fd not registered with driver\n",
-			__func__);
+		pr_debug("%s: ion fd not registered with driver\n", __func__);
 		binfo = kzalloc(sizeof(*binfo), GFP_KERNEL);
 		if (!binfo) {
-			pr_err("%s: err: failed to allocate binfo\n",
-				__func__);
+			pr_err("%s: failed to allocate binfo\n", __func__);
 			rc = -ENOMEM;
 			goto error;
 		}
@@ -260,7 +357,7 @@ int qcedev_check_and_map_buffer(void *handle,
 		}
 		rc = msm_gpce_ion_smmu_map(buf, binfo, drv_handles);
 		if (rc) {
-			pr_err("%s: err: failed to map fd (%d) error = %d\n",
+			pr_err("%s: failed to map fd (%d) error = %d\n",
 				__func__, fd, rc);
 			goto error;
 		}
@@ -270,8 +367,7 @@ int qcedev_check_and_map_buffer(void *handle,
 	}
 	/* Make sure the offset is within the mapped range */
 	if (offset >= mapped_size) {
-		pr_err(
-			"%s: err: Offset (%u) exceeds mapped size(%lu) for fd: %d\n",
+		pr_err("%s: Offset (%u) exceeds mapped size(%lu) for fd: %d\n",
 			__func__, offset, mapped_size, fd);
 		rc = -ERANGE;
 		goto unmap;
@@ -297,14 +393,15 @@ error:
 	return rc;
 }
 
-int qcedev_check_and_unmap_buffer(void *handle, int fd, struct qce_fe_drv_hab_handles *drv_handles)
+int qcedev_check_and_unmap_buffer(void *handle, int fd,
+		struct qce_fe_drv_hab_handles *drv_handles)
 {
 	struct qcedev_fe_reg_buf_info *binfo = NULL, *dummy = NULL;
 	struct qcedev_fe_handle *qce_hndl = handle;
 	bool found = false;
 
 	if (!handle || fd < 0) {
-		pr_err("%s: err: invalid input arguments\n", __func__);
+		pr_err("%s: invalid input arguments\n", __func__);
 		return -EINVAL;
 	}
 
@@ -329,8 +426,7 @@ int qcedev_check_and_unmap_buffer(void *handle, int fd, struct qce_fe_drv_hab_ha
 	mutex_unlock(&qce_hndl->registeredbufs.lock);
 
 	if (!found) {
-		pr_err("%s: err: calling unmap on unknown fd %d\n",
-			__func__, fd);
+		pr_err("%s: calling unmap on unknown fd %d\n", __func__, fd);
 		return -EINVAL;
 	}
 
@@ -344,7 +440,7 @@ int qcedev_unmap_all_buffers(void *handle, struct qce_fe_drv_hab_handles *drv_ha
 	struct list_head *pos;
 
 	if (!handle) {
-		pr_err("%s: err: invalid input arguments\n", __func__);
+		pr_err("%s: invalid input arguments\n", __func__);
 		return -EINVAL;
 	}
 
