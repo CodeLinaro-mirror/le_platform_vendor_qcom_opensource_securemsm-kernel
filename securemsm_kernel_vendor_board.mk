@@ -97,6 +97,7 @@ ifeq ($(ENABLE_QRNG_DLKM), true)
   ifeq ($(ENABLE_HYP), true)
     BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/qrng_dlkm.ko
     BOARD_VENDOR_RAMDISK_KERNEL_MODULES_LOAD += $(KERNEL_MODULES_OUT)/qrng_dlkm.ko
+    16K_FIRST_STAGE_EXTRA += $(KERNEL_MODULES_OUT)/16k/qrng_dlkm.ko
   endif # ENABLE_HYP
 endif #ENABLE_QRNG_DLKM
 
@@ -114,6 +115,7 @@ ifeq ($(ENABLE_SMCINVOKE_DLKM), true)
 BOARD_VENDOR_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
 BOARD_VENDOR_RAMDISK_KERNEL_MODULES += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
 BOARD_VENDOR_RAMDISK_RECOVERY_KERNEL_MODULES_LOAD += $(KERNEL_MODULES_OUT)/smcinvoke_dlkm.ko
+16K_FIRST_STAGE_EXTRA += $(KERNEL_MODULES_OUT)/16k/smcinvoke_dlkm.ko
 #Hamoa AL follows bluey rules unlike other android targets and causing a bootup issue.
 #Skip loading in first stage just for Hamoa AL to fix issue.
 ifneq ($(TARGET_BOARD_PLATFORM), hamoa)
