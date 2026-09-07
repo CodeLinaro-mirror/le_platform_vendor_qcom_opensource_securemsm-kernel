@@ -94,7 +94,7 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
             ],
             "//build/qcom_build_extensions:qtisocrepo_false": [],
         })
-    if target == "hamoa_la" or target == "sun" or target == "canoe" or target == "art" or target == "vienna" or target == "parrot" or target == "art16k":
+    if target == "hamoa_la" or target == "sun" or target == "canoe" or target == "art" or target == "vienna" or target == "parrot" or target == "art16k" or target == "pebble-le":
         deps += select({
             "//build/qcom_build_extensions:qtisocrepo_true": [
                 "//soc-repo:{}/drivers/misc/qseecom_proxy".format(kernel_build_variant),
@@ -150,11 +150,14 @@ def define_target_variant_modules(target, variant, modules, extra_options = [], 
     )
 
 def define_consolidate_gki_modules(target, modules, extra_options = [], config_option = None):
+    # LE targets that need vm_target=False to get sps_drv dependency
+    le_targets = ["pebble-le"]
+    vm_target = False if target in le_targets else True
     define_target_variant_modules(target, "consolidate", modules, extra_options, config_option)
     define_target_variant_modules(target, "gki", modules, extra_options, config_option)
     define_target_variant_modules(target, "perf", modules, extra_options, config_option)
-    define_target_variant_modules(target, "debug-defconfig", modules, extra_options, config_option, vm_target = True)
-    define_target_variant_modules(target, "defconfig", modules, extra_options, config_option, vm_target = True)
+    define_target_variant_modules(target, "debug-defconfig", modules, extra_options, config_option, vm_target = vm_target)
+    define_target_variant_modules(target, "defconfig", modules, extra_options, config_option, vm_target = vm_target)
 
 def define_vm_modules(target, modules, extra_options = [], config_option = None):
     define_target_variant_modules(target, "debug-defconfig", modules, extra_options, config_option, vm_target = True)
