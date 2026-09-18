@@ -109,12 +109,14 @@ ifneq ($(CONFIG_DISABLE_TEST_MODULES), y)
     obj-m += tornado_mod.o
     tornado_mod-objs := securemsm_tests/tornado_mod/tornado_mod.o
 
+    obj-m += seccam_test_driver.o
+    seccam_test_driver-objs := securemsm_tests/seccam_test_driver/seccam_test_driver.o
+endif
+
+ifeq ($(ENABLE_HDCP_TEST), true)
     KBUILD_CPPFLAGS += -DCONFIG_HDCP_QSEECOM
     obj-m += hdcp2p2_test.o
     hdcp2p2_test-objs := securemsm_tests/hdcp2p2_test/hdcp2p2_test.o
-
-    obj-m += seccam_test_driver.o
-    seccam_test_driver-objs := securemsm_tests/seccam_test_driver/seccam_test_driver.o
 endif
 
 ifneq ($(CONFIG_ARCH_QTI_VM), y)
