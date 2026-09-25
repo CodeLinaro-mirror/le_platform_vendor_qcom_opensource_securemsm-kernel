@@ -816,7 +816,13 @@ static int cb_probe_handler(struct device *dev)
 		return -EINVAL;
 	}
 
+#if (KERNEL_VERSION(6, 18, 0) <= LINUX_VERSION_CODE)
+	/* Use the new API on 6.18+ */
+	qcom_iommu_set_fault_handler(domain, proxy_fault_handler, NULL);
+#else
+	/* Old API for earlier kernels */
 	iommu_set_fault_handler(domain, proxy_fault_handler, NULL);
+#endif
 	cb_devices[context_bank_id].dev = dev;
 
 	return 0;
