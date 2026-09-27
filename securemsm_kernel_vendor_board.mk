@@ -82,8 +82,10 @@ ifeq ($(TARGET_BOARD_PLATFORM), gen5)
 endif
 
 # Enable Hibernate kernel module
-ifeq ($(filter $(TARGET_BOARD_PLATFORM), seraph vienna),$(TARGET_BOARD_PLATFORM))
-  ENABLE_HIBERNATE_TZDATA_MGR_DLKM := true
+ifeq ($(ENABLE_SECUREMSM_DLKM), true)
+  ifeq ($(filter $(TARGET_BOARD_PLATFORM), seraph vienna),$(TARGET_BOARD_PLATFORM))
+    ENABLE_HIBERNATE_TZDATA_MGR_DLKM := true
+  endif
 endif
 
 ifeq ($(ENABLE_QCRYPTO_DLKM), true)

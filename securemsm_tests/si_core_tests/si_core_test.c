@@ -693,6 +693,22 @@ static ssize_t device_write(struct file *file, const char __user *buf, size_t co
 
 	kfree(firmware_buffer);
 
+	pr_info("Running test case 5: timed retry forwarder for send command\n");
+	if (si_core_kernel_test_compat_retry_send_cmd() != 0) {
+		pr_err("SI_CORE_KERNEL_TEST_COMPAT_RETRY_SEND_COMMAND failed.\n");
+		success = false;
+	} else {
+		pr_info("SI_CORE_KERNEL_TEST_COMPAT_RETRY_SEND_COMMAND succeed.\n");
+	}
+
+	pr_info("Running test case 6: timed retry forwarder for shutdown\n");
+	if (si_core_kernel_test_compat_retry_shutdown() != 0) {
+		pr_err("SI_CORE_KERNEL_TEST_COMPAT_RETRY_SHUTDOWN failed.\n");
+		success = false;
+	} else {
+		pr_info("SI_CORE_KERNEL_TEST_COMPAT_RETRY_SHUTDOWN succeed.\n");
+	}
+
 #endif
 
 	if (success)
