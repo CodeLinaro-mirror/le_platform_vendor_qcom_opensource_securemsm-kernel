@@ -50,6 +50,12 @@ qcrypto-msm_dlkm-objs := crypto-qti/qcrypto.o
 obj-$(CONFIG_HDCP_QSEECOM) += hdcp_qseecom_dlkm.o
 hdcp_qseecom_dlkm-objs := hdcp/hdcp_main.o hdcp/hdcp_smcinvoke.o hdcp/hdcp_qseecom.o
 
+ifeq ($(ENABLE_HDCP_TEST), true)
+    KBUILD_CPPFLAGS += -DCONFIG_HDCP_QSEECOM
+    obj-m += hdcp2p2_test.o
+    hdcp2p2_test-objs := ../../../../security/securemsm-internal/hdcp_test/hdcp2p2_test.o
+endif
+
 obj-$(CONFIG_HW_RANDOM_MSM_LEGACY) += qrng_dlkm.o
 qrng_dlkm-objs := qrng/msm_rng.o
 

@@ -495,12 +495,18 @@ static uint32_t qseelog_buf_size;
 static phys_addr_t disp_buf_paddr;
 static uint32_t tmecrashdump_address_offset;
 
+/* Ring-buffer read cursors for tz_log and qsee_log.
+ * Promoted to file scope so tz_log_restore() can reset them directly
+ * after TZ cold-boots on hibernation resume.
+ */
+static struct tzdbg_log_pos_t    tz_log_start;
+static struct tzdbg_log_pos_v2_t tz_log_start_v2;
+static struct tzdbg_log_pos_t    qsee_log_start;
+static struct tzdbg_log_pos_v2_t qsee_log_start_v2;
+
 static uint64_t qseelog_shmbridge_handle;
 static struct encrypted_log_info enc_qseelog_info;
 static struct encrypted_log_info enc_tzlog_info;
-#ifdef CONFIG_PM
-static bool restore_from_hibernation;
-#endif
 
 /*
  * Debugfs data structure and functions
@@ -1070,21 +1076,8 @@ static int _disp_encrpted_log_stats(struct encrypted_log_info *enc_log_info,
 
 static int _disp_tz_log_stats(size_t count)
 {
-	static struct tzdbg_log_pos_v2_t log_start_v2 = {0};
-	static struct tzdbg_log_pos_t log_start = {0};
 	struct tzdbg_log_v2_t *log_v2_ptr;
 	struct tzdbg_log_t *log_ptr;
-#ifdef CONFIG_PM
-	/* wrap and offset are initialized to zero since tz is coldboot
-	 * during restoration from hibernation.the reason to initialise
-	 * the wrap and offset to zero since it contains previous boot
-	 * values and which are invalid now.
-	 */
-	if (restore_from_hibernation) {
-		log_start.wrap = log_start.offset = 0;
-		return 0;
-	}
-#endif
 
 	log_ptr = (struct tzdbg_log_t *)((unsigned char *)tzdbg.diag_buf +
 			tzdbg.diag_buf->ring_off -
@@ -1095,10 +1088,10 @@ static int _disp_tz_log_stats(size_t count)
 			offsetof(struct tzdbg_log_v2_t, log_buf));
 
 	if (!tzdbg.is_enlarged_buf)
-		return _disp_log_stats(log_ptr, &log_start,
+		return _disp_log_stats(log_ptr, &tz_log_start,
 				tzdbg.diag_buf->ring_len, count, TZDBG_LOG);
 
-	return _disp_log_stats_v2(log_v2_ptr, &log_start_v2,
+	return _disp_log_stats_v2(log_v2_ptr, &tz_log_start_v2,
 			tzdbg.diag_buf->ring_len, count, TZDBG_LOG);
 }
 
@@ -1167,27 +1160,13 @@ static int _disp_rm_log_stats(size_t count)
 
 static int _disp_qsee_log_stats(size_t count)
 {
-	static struct tzdbg_log_pos_t log_start = {0};
-	static struct tzdbg_log_pos_v2_t log_start_v2 = {0};
 
 	if (!tzdbg.is_enlarged_buf)
-		return _disp_log_stats(g_qsee_log, &log_start,
-					QSEE_LOG_BUF_SIZE - sizeof(struct tzdbg_log_pos_t),
-					count, TZDBG_QSEE_LOG);
+		return _disp_log_stats(g_qsee_log, &qsee_log_start,
+			QSEE_LOG_BUF_SIZE - sizeof(struct tzdbg_log_pos_t),
+			count, TZDBG_QSEE_LOG);
 
-#ifdef CONFIG_PM
-	/* wrap and offset are initialized to zero since tz is coldboot
-	 * during restoration from hibernation. The reason to initialise
-	 * the wrap and offset to zero since it contains previous values
-	 * and which are invalid now.
-	 */
-	if (restore_from_hibernation) {
-		log_start.wrap = log_start.offset = 0;
-		return 0;
-	}
-#endif
-
-	return _disp_log_stats_v2(g_qsee_log_v2, &log_start_v2,
+	return _disp_log_stats_v2(g_qsee_log_v2, &qsee_log_start_v2,
 		QSEE_LOG_BUF_SIZE_V2 - sizeof(struct tzdbg_log_pos_v2_t),
 		count, TZDBG_QSEE_LOG);
 }
@@ -1466,13 +1445,17 @@ static int tzdbg_init_tme_log(struct platform_device *pdev, void __iomem *virt_i
 /*
  * Allocates log buffer from ION, registers the buffer at TZ
  */
-static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
+/*
+ * tzdbg_alloc_qsee_log_buf - allocate DMA buffer only.
+ *
+ * Called once from probe().  The buffer lives for the entire driver
+ * lifetime and is freed only in remove().  Hibernation never re-allocates
+ * it — only the shmbridge and SCM registration are torn down and rebuilt
+ * across freeze/restore cycles.
+ */
+static int tzdbg_alloc_qsee_log_buf(struct platform_device *pdev)
 {
-	int ret = 0;
 	void *buf = NULL;
-	uint32_t ns_vmids[] = {VMID_HLOS};
-	uint32_t ns_vm_perms[] = {PERM_READ | PERM_WRITE};
-	uint32_t ns_vm_nums = 1;
 
 	if (tzdbg.is_enlarged_buf) {
 		if (of_property_read_u32((&pdev->dev)->of_node,
@@ -1480,7 +1463,7 @@ static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 			pr_debug("Enlarged qseelog buf size isn't defined\n");
 			qseelog_buf_size = QSEE_LOG_BUF_SIZE_V2;
 		}
-	}  else {
+	} else {
 		qseelog_buf_size = QSEE_LOG_BUF_SIZE;
 	}
 	pr_debug("qseelog buf size is 0x%x\n", qseelog_buf_size);
@@ -1490,6 +1473,40 @@ static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 	if (buf == NULL)
 		return -ENOMEM;
 
+	g_qsee_log = (struct tzdbg_log_t *)buf;
+	g_qsee_log->log_pos.wrap = g_qsee_log->log_pos.offset = 0;
+
+	g_qsee_log_v2 = (struct tzdbg_log_v2_t *)buf;
+	g_qsee_log_v2->log_pos.wrap = g_qsee_log_v2->log_pos.offset = 0;
+
+	/* Reset HLOS read cursors to match the fresh DMA buffer state.
+	 * Also covers module reload: file-scope vars retain values from
+	 * the previous probe lifetime and must be zeroed on each probe.
+	 */
+	tz_log_start.wrap      = tz_log_start.offset      = 0;
+	tz_log_start_v2.wrap   = tz_log_start_v2.offset   = 0;
+	qsee_log_start.wrap    = qsee_log_start.offset    = 0;
+	qsee_log_start_v2.wrap = qsee_log_start_v2.offset = 0;
+
+	return 0;
+}
+
+/*
+ * tzdbg_register_qsee_log_buf - register shmbridge + SCM slot.
+ *
+ * Called from probe() and .restore() — contexts where the TZ SCM slot is
+ * guaranteed empty (fresh boot or post-cold-boot resume).  The DMA buffer
+ * must already be allocated by tzdbg_alloc_qsee_log_buf() before calling
+ * this.  On the freeze-thaw path TZ is never reset so this must NOT be
+ * called from .thaw.
+ */
+static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
+{
+	int ret = 0;
+	uint32_t ns_vmids[] = {VMID_HLOS};
+	uint32_t ns_vm_perms[] = {PERM_READ | PERM_WRITE};
+	uint32_t ns_vm_nums = 1;
+
 	if (!tzdbg.is_encrypted_log_enabled) {
 		ret = qtee_shmbridge_register(coh_pmem,
 			qseelog_buf_size, ns_vmids, ns_vm_perms, ns_vm_nums,
@@ -1497,44 +1514,91 @@ static int tzdbg_register_qsee_log_buf(struct platform_device *pdev)
 			&qseelog_shmbridge_handle);
 		if (ret) {
 			pr_err("failed to create bridge for qsee_log buf\n");
-			goto exit_free_mem;
+			return ret;
 		}
 	}
 
-	g_qsee_log = (struct tzdbg_log_t *)buf;
-	g_qsee_log->log_pos.wrap = g_qsee_log->log_pos.offset = 0;
-
-	g_qsee_log_v2 = (struct tzdbg_log_v2_t *)buf;
-	g_qsee_log_v2->log_pos.wrap = g_qsee_log_v2->log_pos.offset = 0;
-
 	ret = qcom_scm_register_qsee_log_buf(coh_pmem, qseelog_buf_size);
 	if (ret != QSEOS_RESULT_SUCCESS) {
-		pr_err(
-		"%s: scm_call to register log buf failed, resp result =%d\n",
-		__func__, ret);
-		goto exit_dereg_bridge;
+		pr_err("%s: scm_call to register log buf failed, result=%d\n",
+			__func__, ret);
+		if (!tzdbg.is_encrypted_log_enabled)
+			qtee_shmbridge_deregister(qseelog_shmbridge_handle);
+		return ret;
 	}
 
-	return ret;
+	return 0;
+}
 
-exit_dereg_bridge:
+/*
+ * tzdbg_unregister_qsee_log_buf - deregister shmbridge only.
+ *
+ * Called from remove() before freeing the DMA buffer, and from .restore()
+ * error paths.  Does NOT free the DMA buffer.
+ */
+static void tzdbg_unregister_qsee_log_buf(void)
+{
 	if (!tzdbg.is_encrypted_log_enabled)
 		qtee_shmbridge_deregister(qseelog_shmbridge_handle);
-exit_free_mem:
-	dma_free_coherent(&pdev->dev, qseelog_buf_size,
-			(void *)g_qsee_log, coh_pmem);
-	return ret;
 }
 
 static void tzdbg_free_qsee_log_buf(struct platform_device *pdev)
 {
-	if (!tzdbg.is_encrypted_log_enabled)
-		qtee_shmbridge_deregister(qseelog_shmbridge_handle);
-	dma_free_coherent(&pdev->dev, qseelog_buf_size,
-				(void *)g_qsee_log, coh_pmem);
+	if (!g_qsee_log)
+		return;
+	dma_free_coherent(&pdev->dev, qseelog_buf_size, (void *)g_qsee_log, coh_pmem);
+	g_qsee_log = NULL;
+	g_qsee_log_v2 = NULL;
 }
 
+/*
+ * tzdbg_allocate_encrypted_log_buf - allocate DMA buffers only.
+ *
+ * Called once from probe().  Buffers live for the driver lifetime.
+ * Shmbridge registration is done separately by
+ * tzdbg_register_encrypted_log_buf().
+ */
 static int tzdbg_allocate_encrypted_log_buf(struct platform_device *pdev)
+{
+	if (!tzdbg.is_encrypted_log_enabled)
+		return 0;
+
+	/* max encrypted qsee log buf size (include header, and page align) */
+	enc_qseelog_info.size = qseelog_buf_size + PAGE_SIZE;
+
+	enc_qseelog_info.vaddr = dma_alloc_coherent(&pdev->dev,
+					enc_qseelog_info.size,
+					&enc_qseelog_info.paddr, GFP_KERNEL);
+	if (enc_qseelog_info.vaddr == NULL)
+		return -ENOMEM;
+
+	pr_debug("Alloc memory for encr_qsee_log, size = %zu\n",
+			enc_qseelog_info.size);
+
+	enc_tzlog_info.size = debug_rw_buf_size;
+	enc_tzlog_info.vaddr = dma_alloc_coherent(&pdev->dev,
+					enc_tzlog_info.size,
+					&enc_tzlog_info.paddr, GFP_KERNEL);
+	if (enc_tzlog_info.vaddr == NULL) {
+		dma_free_coherent(&pdev->dev, enc_qseelog_info.size,
+				enc_qseelog_info.vaddr, enc_qseelog_info.paddr);
+		enc_qseelog_info.vaddr = NULL;
+		return -ENOMEM;
+	}
+
+	pr_debug("Alloc memory for encr_tz_log, size %zu\n",
+		enc_tzlog_info.size);
+
+	return 0;
+}
+
+/*
+ * tzdbg_register_encrypted_log_buf - register shmbridges for encrypted bufs.
+ *
+ * Called from probe() and .restore() after tzdbg_allocate_encrypted_log_buf().
+ * The DMA buffers must already be allocated before calling this.
+ */
+static int tzdbg_register_encrypted_log_buf(struct platform_device *pdev)
 {
 	int ret = 0;
 	uint32_t ns_vmids[] = {VMID_HLOS};
@@ -1544,64 +1608,53 @@ static int tzdbg_allocate_encrypted_log_buf(struct platform_device *pdev)
 	if (!tzdbg.is_encrypted_log_enabled)
 		return 0;
 
-	/* max encrypted qsee log buf zize (include header, and page align) */
-	enc_qseelog_info.size = qseelog_buf_size + PAGE_SIZE;
-
-	enc_qseelog_info.vaddr = dma_alloc_coherent(&pdev->dev,
-					enc_qseelog_info.size,
-					&enc_qseelog_info.paddr, GFP_KERNEL);
-	if (enc_qseelog_info.vaddr == NULL)
-		return -ENOMEM;
-
 	ret = qtee_shmbridge_register(enc_qseelog_info.paddr,
 			enc_qseelog_info.size, ns_vmids,
 			ns_vm_perms, ns_vm_nums,
 			PERM_READ | PERM_WRITE, &enc_qseelog_info.shmb_handle);
 	if (ret) {
 		pr_err("failed to create encr_qsee_log bridge, ret %d\n", ret);
-		goto exit_free_qseelog;
+		return ret;
 	}
-	pr_debug("Alloc memory for encr_qsee_log, size = %zu\n",
-			enc_qseelog_info.size);
-
-	enc_tzlog_info.size = debug_rw_buf_size;
-	enc_tzlog_info.vaddr = dma_alloc_coherent(&pdev->dev,
-					enc_tzlog_info.size,
-					&enc_tzlog_info.paddr, GFP_KERNEL);
-	if (enc_tzlog_info.vaddr == NULL)
-		goto exit_unreg_qseelog;
 
 	ret = qtee_shmbridge_register(enc_tzlog_info.paddr,
 			enc_tzlog_info.size, ns_vmids, ns_vm_perms, ns_vm_nums,
 			PERM_READ | PERM_WRITE, &enc_tzlog_info.shmb_handle);
 	if (ret) {
 		pr_err("failed to create encr_tz_log bridge, ret = %d\n", ret);
-		goto exit_free_tzlog;
+		qtee_shmbridge_deregister(enc_qseelog_info.shmb_handle);
+		return ret;
 	}
-	pr_debug("Alloc memory for encr_tz_log, size %zu\n",
-		enc_qseelog_info.size);
 
 	return 0;
+}
 
-exit_free_tzlog:
-	dma_free_coherent(&pdev->dev, enc_tzlog_info.size,
-			enc_tzlog_info.vaddr, enc_tzlog_info.paddr);
-exit_unreg_qseelog:
-	qtee_shmbridge_deregister(enc_qseelog_info.shmb_handle);
-exit_free_qseelog:
-	dma_free_coherent(&pdev->dev, enc_qseelog_info.size,
-			enc_qseelog_info.vaddr, enc_qseelog_info.paddr);
-	return -ENOMEM;
+/*
+ * tzdbg_unregister_encrypted_log_buf - deregister shmbridges only.
+ *
+ * Called from remove() before freeing DMA buffers, and from .restore()
+ * error paths.  Does NOT free the DMA buffers.
+ */
+static void tzdbg_unregister_encrypted_log_buf(void)
+{
+	if (enc_tzlog_info.vaddr)
+		qtee_shmbridge_deregister(enc_tzlog_info.shmb_handle);
+	if (enc_qseelog_info.vaddr)
+		qtee_shmbridge_deregister(enc_qseelog_info.shmb_handle);
 }
 
 static void tzdbg_free_encrypted_log_buf(struct platform_device *pdev)
 {
-	qtee_shmbridge_deregister(enc_tzlog_info.shmb_handle);
-	dma_free_coherent(&pdev->dev, enc_tzlog_info.size,
-			enc_tzlog_info.vaddr, enc_tzlog_info.paddr);
-	qtee_shmbridge_deregister(enc_qseelog_info.shmb_handle);
-	dma_free_coherent(&pdev->dev, enc_qseelog_info.size,
-			enc_qseelog_info.vaddr, enc_qseelog_info.paddr);
+	if (enc_tzlog_info.vaddr) {
+		dma_free_coherent(&pdev->dev, enc_tzlog_info.size,
+				enc_tzlog_info.vaddr, enc_tzlog_info.paddr);
+		enc_tzlog_info.vaddr = NULL;
+	}
+	if (enc_qseelog_info.vaddr) {
+		dma_free_coherent(&pdev->dev, enc_qseelog_info.size,
+				enc_qseelog_info.vaddr, enc_qseelog_info.paddr);
+		enc_qseelog_info.vaddr = NULL;
+	}
 }
 
 static int  tzdbg_fs_init(struct platform_device *pdev)
@@ -1919,31 +1972,45 @@ static int tz_log_probe(struct platform_device *pdev)
 		pr_warn("Tme log initialization failed!\n");
 	}
 
-	/* register unencrypted qsee log buffer */
-	ret = tzdbg_register_qsee_log_buf(pdev);
+	/* allocate qsee log DMA buffer (lives for driver lifetime) */
+	ret = tzdbg_alloc_qsee_log_buf(pdev);
 	if (ret)
 		goto exit_free_diag_buf;
 
-	/* allocate encrypted qsee and tz log buffer */
+	/* register shmbridge + SCM slot for qsee log */
+	ret = tzdbg_register_qsee_log_buf(pdev);
+	if (ret)
+		goto exit_free_qsee_log_buf;
+
+	/* allocate encrypted qsee and tz log DMA buffers */
 	ret = tzdbg_allocate_encrypted_log_buf(pdev);
 	if (ret) {
 		dev_err(&pdev->dev,
 			" %s: Failed to allocate encrypted log buffer\n",
 			__func__);
-		goto exit_free_qsee_log_buf;
+		goto exit_unreg_qsee_log_buf;
+	}
+
+	/* register shmbridges for encrypted log buffers */
+	ret = tzdbg_register_encrypted_log_buf(pdev);
+	if (ret) {
+		dev_err(&pdev->dev,
+			" %s: Failed to register encrypted log buffer\n",
+			__func__);
+		goto exit_free_encr_log_buf;
 	}
 
 	/* allocate display_buf */
 	if (UINT_MAX/4 < qseelog_buf_size) {
 		pr_err("display_buf_size integer overflow\n");
-		goto exit_free_qsee_log_buf;
+		goto exit_unreg_encr_log_buf;
 	}
 	display_buf_size = qseelog_buf_size * 4;
 	tzdbg.disp_buf = dma_alloc_coherent(&pdev->dev, display_buf_size,
 		&disp_buf_paddr, GFP_KERNEL);
 	if (tzdbg.disp_buf == NULL) {
 		ret = -ENOMEM;
-		goto exit_free_encr_log_buf;
+		goto exit_unreg_encr_log_buf;
 	}
 
 	if (tzdbg_fs_init(pdev))
@@ -1953,8 +2020,12 @@ static int tz_log_probe(struct platform_device *pdev)
 exit_free_disp_buf:
 	dma_free_coherent(&pdev->dev, display_buf_size,
 			(void *)tzdbg.disp_buf, disp_buf_paddr);
+exit_unreg_encr_log_buf:
+	tzdbg_unregister_encrypted_log_buf();
 exit_free_encr_log_buf:
 	tzdbg_free_encrypted_log_buf(pdev);
+exit_unreg_qsee_log_buf:
+	tzdbg_unregister_qsee_log_buf();
 exit_free_qsee_log_buf:
 	tzdbg_free_qsee_log_buf(pdev);
 exit_free_diag_buf:
@@ -1972,7 +2043,9 @@ static void tz_log_remove(struct platform_device *pdev)
 	tzdbg_fs_exit(pdev);
 	dma_free_coherent(&pdev->dev, display_buf_size,
 			(void *)tzdbg.disp_buf, disp_buf_paddr);
+	tzdbg_unregister_encrypted_log_buf();
 	tzdbg_free_encrypted_log_buf(pdev);
+	tzdbg_unregister_qsee_log_buf();
 	tzdbg_free_qsee_log_buf(pdev);
 	if (!tzdbg.is_encrypted_log_enabled)
 		kfree(tzdbg.diag_buf);
@@ -1982,46 +2055,72 @@ static void tz_log_remove(struct platform_device *pdev)
 }
 
 #ifdef CONFIG_PM
-static int tz_log_freeze(struct device *dev)
-{
-	/* This Boolean variable is maintained to initialise the ring buffer
-	 * log pointer to zero during restoration from hibernation
-	 */
-	restore_from_hibernation = true;
-	if (g_qsee_log)
-		dma_free_coherent(dev, QSEE_LOG_BUF_SIZE, (void *)g_qsee_log,
-					coh_pmem);
-	if (!tzdbg.is_encrypted_log_enabled)
-		qtee_shmbridge_deregister(qseelog_shmbridge_handle);
-	return 0;
-}
+/*
+ * Hibernation PM callbacks
+ * ========================
+ * DMA buffers (g_qsee_log, enc_qseelog_info, enc_tzlog_info) are allocated
+ * once at probe() and freed only at remove().  They are preserved across
+ * hibernation in the snapshot image and remain valid on both paths.
+ *
+ * Only the shmbridge registrations and the TZ SCM slot are transient:
+ *   - On the freeze-thaw path (snapshot-return) TZ never cold-boots, so
+ *     the SCM slot and shmbridges remain live.  .freeze and .thaw are
+ *     not registered; the kernel PM core treats them as no-ops.
+ *   - On the full hibernation path TZ cold-boots, clearing the SCM slot
+ *     and invalidating shmbridges.  .restore re-registers them without
+ *     touching the DMA buffers.
+ *
+ * Resource lifecycle:
+ *   probe()   : alloc DMA bufs + register shmbridge + SCM slot
+ *   .freeze   : not registered (no-op)
+ *   .thaw     : not registered (no-op)
+ *   .restore  : re-register shmbridge + SCM slot; reset ring-buffer cursors
+ *               [hibernation-resume path, TZ cold-booted]
+ *   remove()  : unregister shmbridge + SCM slot; free DMA bufs
+ */
 
 static int tz_log_restore(struct device *dev)
 {
-	/* ring buffer log pointer needs to be re initialized
-	 * during restoration from hibernation.
+	struct platform_device *pdev = to_platform_device(dev);
+	int ret;
+
+	/*
+	 * Hibernation-resume path: TZ has cold-booted.  The SCM slot and
+	 * shmbridges are gone.  DMA buffers are intact in the snapshot image.
+	 * Re-register shmbridge + SCM slot without re-allocating DMA memory.
 	 */
-	if (restore_from_hibernation) {
-		_disp_tz_log_stats(0);
-		_disp_qsee_log_stats(0);
+	ret = tzdbg_register_qsee_log_buf(pdev);
+	if (ret) {
+		pr_err("%s: failed to register qsee log buf on restore, ret=%d\n",
+			__func__, ret);
+		return ret;
 	}
-	/* Register the log bugger at TZ during hibernation resume.
-	 * After hibernation the log buffer is with HLOS as TZ encountered
-	 * a coldboot sequence.
+
+	ret = tzdbg_register_encrypted_log_buf(pdev);
+	if (ret) {
+		pr_err("%s: failed to register encrypted log bufs on restore, ret=%d\n",
+			__func__, ret);
+		tzdbg_unregister_qsee_log_buf();
+		return ret;
+	}
+
+	/*
+	 * Reset ring-buffer read cursors: TZ cold-booted so all previous
+	 * wrap/offset values are invalid.  The file-scope cursor variables
+	 * are zeroed here so the next _disp_tz_log_stats() /
+	 * _disp_qsee_log_stats() call starts reading from the beginning of
+	 * the fresh TZ log.
 	 */
-	tzdbg_register_qsee_log_buf(to_platform_device(dev));
-	/* This is set back to zero after successful restoration
-	 * from hibernation.
-	 */
-	restore_from_hibernation = false;
+	tz_log_start.wrap      = tz_log_start.offset      = 0;
+	tz_log_start_v2.wrap   = tz_log_start_v2.offset   = 0;
+	qsee_log_start.wrap    = qsee_log_start.offset    = 0;
+	qsee_log_start_v2.wrap = qsee_log_start_v2.offset = 0;
 
 	return 0;
 }
 
 static const struct dev_pm_ops tz_log_pmops = {
-	.freeze = tz_log_freeze,
 	.restore = tz_log_restore,
-	.thaw = tz_log_restore,
 };
 
 #define TZ_LOG_PMOPS (&tz_log_pmops)
