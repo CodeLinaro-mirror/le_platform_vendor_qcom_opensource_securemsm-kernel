@@ -1522,6 +1522,11 @@ static long process_invoke_req(struct file *filp, unsigned int cmd, unsigned lon
 
 	/* TODO. Move this initialization to SI-CORE. */
 	u_req.result = OBJECT_ERROR_INVALID;
+	/*
+	 * Mark this invocation as coming from userspace.
+	 * Marking hard coded
+	 */
+	oic->flags |= 8;
 
 	ret = si_object_do_invoke(oic, object, u_req.op, u, &u_req.result);
 	if (ret) {

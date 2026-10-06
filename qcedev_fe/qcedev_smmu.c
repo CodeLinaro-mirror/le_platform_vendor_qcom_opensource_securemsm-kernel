@@ -352,8 +352,10 @@ int qcedev_unmap_all_buffers(void *handle, struct qce_fe_drv_hab_handles *drv_ha
 	while (!list_empty(&qce_hndl->registeredbufs.list)) {
 		pos = qce_hndl->registeredbufs.list.next;
 		binfo = list_entry(pos, struct qcedev_fe_reg_buf_info, list);
-		if (binfo)
+		if (binfo){
 			msm_gpce_ion_smmu_unmap(&(binfo->ion_buf), drv_handles);
+			dma_buf_put(binfo->ion_buf.dma_buf);
+		}
 		list_del(pos);
 		kfree(binfo);
 	}
