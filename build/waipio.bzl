@@ -1,4 +1,4 @@
-load(":securemsm_kernel.bzl", "define_consolidate_gki_modules")
+load(":securemsm_kernel.bzl", "define_consolidate_gki_modules", "define_vm_modules")
 
 def define_waipio():
     define_consolidate_gki_modules(
@@ -27,3 +27,17 @@ def define_waipio():
          ],
      )
 
+def define_waipio_vm():
+    define_vm_modules(
+        target = "waipio-tuivm",
+        modules = [
+            "smcinvoke_dlkm",
+            "smmu_proxy_dlkm",
+        ],
+        extra_options = [
+            "CONFIG_QCOM_SMCINVOKE",
+            "CONFIG_QTI_SMMU_PROXY",
+            "CONFIG_QCOM_SI_CORE",
+            "CONFIG_ARCH_QTI_VM",
+        ],
+    )
