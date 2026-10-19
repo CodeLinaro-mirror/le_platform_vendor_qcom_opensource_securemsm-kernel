@@ -16,6 +16,7 @@
 #include <linux/qtee_shmbridge.h>
 #include <linux/firmware/qcom/si_object.h>
 #include <linux/firmware/qcom/si_core_xts.h>
+#include <linux/version.h>
 
 #if IS_ENABLED(CONFIG_QSEECOM_COMPAT)
 #include "linux/qseecom_api.h"
@@ -38,6 +39,12 @@ const uint32_t CQSEEComCompatAppLoader_UID = 122;
 #define SI_CORE_QSEECOMCOMPAT_TRF_TIMEOUT_MS			420000
 #define SI_CORE_QSEECOMCOMPAT_TRF_INTERVAL_MS			5
 #define Object_ERROR_BUSY					-99
+
+#if KERNEL_VERSION(6, 7, 0) <= LINUX_VERSION_CODE
+#define USE_LOAD_FROM_REGION
+#else
+#define USE_LOAD_FROM_BUFFER
+#endif
 
 /* SMCI QSEECOMCOMPAT OP IDs */
 #define SI_CORE_QSEECOMCOMPAT_OP_SEND_REQUEST			0
@@ -190,6 +197,8 @@ static int si_core_qseecomcompat_send_request(
 	return 0;
 }
 
+#ifdef USE_LOAD_FROM_REGION
+
 static void qsee_mo_release(void *priv)
 {
 	struct qsee_mo_ctx *ctx = (struct qsee_mo_ctx *)priv;
@@ -282,6 +291,8 @@ static int si_core_qseecomcompat_load_from_region(
 	args[2].type = SI_AT_OO;
 	args[3].type = SI_AT_END;
 
+	get_si_object(mem_obj);
+
 	ret = si_object_do_invoke(oic, app_loader,
 				SI_CORE_QSEECOMCOMPAT_OP_LOAD_FROM_REGION,
 				args, &result);
@@ -294,6 +305,51 @@ static int si_core_qseecomcompat_load_from_region(
 
 	return 0;
 }
+
+#else /* USE_LOAD_FROM_BUFFER */
+
+static int si_core_qseecomcompat_load_from_buffer(
+	struct si_object_invoke_ctx *oic,
+	struct si_object *app_loader,
+	const void *app_elf_ptr, size_t app_elf_len,
+	const void *filename_ptr, size_t filename_len,
+	void *dist_name_ptr, size_t dist_name_len,
+	size_t *dist_name_lenout,
+	struct si_object **app_controller)
+{
+	int result = 0;
+	int ret = 0;
+	struct si_arg args[5] = {0};
+
+	args[0].type = SI_AT_IB;
+	args[0].b.addr = (void *)app_elf_ptr;
+	args[0].b.size = app_elf_len;
+
+	args[1].type = SI_AT_IB;
+	args[1].b.addr = (void *)filename_ptr;
+	args[1].b.size = filename_len;
+
+	args[2].type = SI_AT_OB;
+	args[2].b.addr = dist_name_ptr;
+	args[2].b.size = dist_name_len;
+
+	args[3].type = SI_AT_OO;
+
+	args[4].type = SI_AT_END;
+
+	ret = si_object_do_invoke(oic, app_loader,
+				SI_CORE_QSEECOMCOMPAT_OP_LOAD_FROM_BUFFER,
+				args, &result);
+	if (ret || result)
+		return ret ? ret : result;
+
+	*dist_name_lenout = args[2].b.size;
+	*app_controller = args[3].o;
+
+	return 0;
+}
+
+#endif /* USE_LOAD_FROM_REGION / USE_LOAD_FROM_BUFFER */
 
 static int si_core_qseecomcompat_unload(
 	struct si_object_invoke_ctx *oic,
@@ -317,6 +373,55 @@ static int si_core_qseecomcompat_unload(
 	return 0;
 }
 
+#ifdef USE_LOAD_FROM_REGION
+static int load_app_from_region(struct qseecom_compat_context *cxt,
+	const char *app_name, struct si_object *app_loader,
+	u8 *imgbuf_va, size_t fw_size)
+{
+	struct si_object *mo = NULL;
+	int ret;
+
+	mo = qsee_mo_init(imgbuf_va, fw_size);
+	if (!mo)
+		return -EINVAL;
+
+	ret = si_core_qseecomcompat_load_from_region(&cxt->oic, app_loader,
+					mo, app_name, strlen(app_name),
+					&cxt->app_controller);
+	if (ret)
+		pr_err("loadFromRegion failed for app %s, ret = %d\n",
+				app_name, ret);
+	else
+		pr_info("loadFromRegion succeeded for app %s\n", app_name);
+
+	put_si_object(mo);
+	return ret;
+}
+#endif
+
+#ifdef USE_LOAD_FROM_BUFFER
+static int load_app_from_buffer(struct qseecom_compat_context *cxt,
+	const char *app_name, struct si_object *app_loader,
+	u8 *imgbuf_va, size_t fw_size)
+{
+	char dist_name[MAX_FW_APP_SIZE] = {0};
+	size_t dist_name_len = 0;
+	int ret;
+
+	ret = si_core_qseecomcompat_load_from_buffer(&cxt->oic, app_loader,
+					imgbuf_va, fw_size, app_name, strlen(app_name),
+				dist_name, MAX_FW_APP_SIZE, &dist_name_len,
+					&cxt->app_controller);
+	if (ret)
+		pr_err("loadFromBuffer failed for app %s, ret = %d\n",
+				app_name, ret);
+	else
+		pr_info("loadFromBuffer succeeded for app %s\n", app_name);
+
+	return ret;
+}
+#endif
+
 static int load_app(struct qseecom_compat_context *cxt,
 	const char *app_name, struct si_object *app_loader)
 {
@@ -325,7 +430,6 @@ static int load_app(struct qseecom_compat_context *cxt,
 	int ret = 0;
 	struct qtee_shm shm = {0};
 	uint32_t arch_type = 0;
-	struct si_object *mo = NULL;
 
 	if (strnlen(app_name, MAX_FW_APP_SIZE) == MAX_FW_APP_SIZE) {
 		pr_err("The app_name (%s) with length %zu is not valid\n",
@@ -347,28 +451,17 @@ static int load_app(struct qseecom_compat_context *cxt,
 		return -EINVAL;
 	}
 
-	mo = qsee_mo_init(imgbuf_va, fw_size);
-	if (!mo) {
-		ret = -EINVAL;
-		goto out;
-	}
-	get_si_object(mo);
+#ifdef USE_LOAD_FROM_REGION
+	ret = load_app_from_region(cxt, app_name, app_loader, imgbuf_va, fw_size);
+#else
+	ret = load_app_from_buffer(cxt, app_name, app_loader, imgbuf_va, fw_size);
+#endif
 
-	ret = si_core_qseecomcompat_load_from_region(&cxt->oic, app_loader,
-					mo, app_name, strlen(app_name),
-					&cxt->app_controller);
-	if (ret) {
-		pr_err("loadFromRegion failed for app %s, ret = %d\n",
-				app_name, ret);
-		goto out_release_mo;
+	if (!ret) {
+		cxt->app_arch = *(uint8_t *)(imgbuf_va + EI_CLASS);
+		pr_info("%s: successfully loaded app %s\n", __func__, app_name);
 	}
 
-	cxt->app_arch = *(uint8_t *)(imgbuf_va + EI_CLASS);
-	pr_info("%s %d, loaded app %s\n", __func__, __LINE__, app_name);
-
-out_release_mo:
-	put_si_object(mo);
-out:
 	qtee_shmbridge_free_shm(&shm);
 	return ret;
 }
@@ -565,6 +658,22 @@ char *firmware_request_from_smcinvoke(const char *appname, size_t *fw_size, stru
 	struct elf32_hdr *ehdr = NULL;
 	struct elf64_hdr *ehdr64 = NULL;
 
+	snprintf(fw_name, sizeof(fw_name), "%s.mbn", appname);
+	rc = firmware_request_nowarn(&fw_entry, fw_name, smci_dev);
+	if (!rc) {
+		*fw_size = fw_entry->size;
+		rc = qtee_shmbridge_allocate_shm((*fw_size), shm);
+		if (rc) {
+			pr_err("smbridge alloc failed for size: %zu\n", *fw_size);
+			release_firmware(fw_entry);
+			return NULL;
+		}
+		img_data_ptr = shm->vaddr;
+		memcpy(img_data_ptr, fw_entry->data, fw_entry->size);
+		release_firmware(fw_entry);
+		fw_entry = NULL;
+		return img_data_ptr;
+	}
 
 	/* load b00*/
 	snprintf(fw_name, sizeof(fw_name), "%s.b00", appname);
@@ -619,8 +728,39 @@ char *firmware_request_from_smcinvoke(const char *appname, size_t *fw_size, stru
 		goto release_fw_entry00;
 	}
 
-	/*Total size of image will be the offset of last image + the size of last split image*/
-	*fw_size = fw_entrylast->size + offset[num_images-1];
+
+	/*Find the total image size*/
+	*fw_size = fw_entry00->size;
+	for (phi = 1; phi < num_images-1; phi++) {
+		snprintf(fw_name, ARRAY_SIZE(fw_name), "%s.b%02d", appname, phi);
+		rc = firmware_request_nowarn(&fw_entry, fw_name, smci_dev);
+		if (rc) {
+			pr_err("Failed to locate blob %s\n", fw_name);
+			goto release_fw_entrylast;
+		}
+
+		if (*fw_size > U32_MAX - fw_entry->size) {
+			release_firmware(fw_entry);
+			fw_entry = NULL;
+			goto release_fw_entrylast;
+		}
+
+		if ((*fw_size) < (offset[phi] + fw_entry->size))
+			*fw_size = offset[phi] + fw_entry->size;
+		release_firmware(fw_entry);
+		fw_entry = NULL;
+	}
+
+	if ((*fw_size) > U32_MAX - fw_entrylast->size)
+		goto release_fw_entrylast;
+
+
+	if (offset[phi] > U32_MAX - fw_entrylast->size)
+		goto release_fw_entrylast;
+
+
+	if ((*fw_size) < (offset[phi] + fw_entrylast->size))
+		*fw_size = offset[phi] + fw_entrylast->size;
 
 	/*Allocate memory for the buffer that will hold the split image*/
 	rc = qtee_shmbridge_allocate_shm((*fw_size), shm);
