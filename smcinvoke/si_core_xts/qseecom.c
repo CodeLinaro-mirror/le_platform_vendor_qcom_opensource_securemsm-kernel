@@ -285,6 +285,22 @@ char *firmware_request_from_smcinvoke(const char *appname, size_t *fw_size, stru
 	struct elf32_hdr *ehdr = NULL;
 	struct elf64_hdr *ehdr64 = NULL;
 
+	snprintf(fw_name, sizeof(fw_name), "%s.mbn", appname);
+	rc = firmware_request_nowarn(&fw_entry, fw_name, smci_dev);
+	if (!rc) {
+		*fw_size = fw_entry->size;
+		rc = qtee_shmbridge_allocate_shm((*fw_size), shm);
+		if (rc) {
+			pr_err("smbridge alloc failed for size: %zu\n", *fw_size);
+			release_firmware(fw_entry);
+			return NULL;
+		}
+		img_data_ptr = shm->vaddr;
+		memcpy(img_data_ptr, fw_entry->data, fw_entry->size);
+		release_firmware(fw_entry);
+		fw_entry = NULL;
+		return img_data_ptr;
+	}
 
 	/* load b00*/
 	snprintf(fw_name, sizeof(fw_name), "%s.b00", appname);

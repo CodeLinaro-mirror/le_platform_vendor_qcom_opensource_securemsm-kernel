@@ -1478,7 +1478,9 @@ static int32_t smcinvoke_process_map_mem_region_req(void *buf, size_t buf_len)
 	struct smcinvoke_mem_obj *mem_obj = NULL;
 
 	if (msg->hdr.counts != OBJECT_COUNTS_PACK(0, 1, 1, 1) ||
-			(buf_len - msg->args[0].b.offset < msg->args[0].b.size)) {
+		msg->args[0].b.offset > buf_len ||
+		msg->args[0].b.size < sizeof(*ob) ||
+		msg->args[0].b.size > (buf_len - msg->args[0].b.offset)) {
 		pr_err("Invalid counts received for mapping mem obj\n");
 		return OBJECT_ERROR_INVALID;
 	}
@@ -1519,7 +1521,9 @@ static int32_t smcinvoke_sleep(void *buf, size_t buf_len)
     uint32_t sleepTimeMs_val = 0;
 
     if (msg->hdr.counts != OBJECT_COUNTS_PACK(1, 0, 0, 0) ||
-       (buf_len - msg->args[0].b.offset < msg->args[0].b.size)) {
+	msg->args[0].b.offset > buf_len ||
+	msg->args[0].b.size < sizeof(uint32_t) ||
+	msg->args[0].b.size > (buf_len - msg->args[0].b.offset)) {
          pr_err("Invalid counts received for sleeping in hlos\n");
          return OBJECT_ERROR_INVALID;
     }
@@ -1922,11 +1926,6 @@ static void process_piggyback_cb_data(uint8_t *outbuf, size_t buf_len)
 	}
 
 	msg = (void *) outbuf;
-	if ((buf_len < msg->args[0].b.offset) ||
-		(buf_len - msg->args[0].b.offset < msg->args[0].b.size)) {
-		pr_err("%s: invalid scenario\n", __func__);
-		return;
-	}
 
 	FOR_ARGS(i, msg->hdr.counts, BI)
 	{
@@ -1951,6 +1950,11 @@ static void process_piggyback_cb_data(uint8_t *outbuf, size_t buf_len)
 		piggyback_offset = TZCB_BUF_OFFSET(msg);
 
 	piggyback_offset = size_align(piggyback_offset, SMCINVOKE_ARGS_ALIGN_SIZE);
+
+	if (piggyback_offset >= buf_len) {
+		pr_err("no space left for async messages!\n");
+		return;
+	}
 
 	// Jump to piggy back data offset
 	piggyback_buf = (uint8_t *)msg + piggyback_offset;

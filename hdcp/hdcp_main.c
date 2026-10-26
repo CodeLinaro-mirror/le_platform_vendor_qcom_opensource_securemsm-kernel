@@ -159,8 +159,10 @@ int hdcp2_app_comm(void *ctx, enum hdcp2_app_cmd cmd,
 		goto error;
 	}
 
-	if (ret)
+	if (ret) {
+		pr_err("Failed to complete cmd %d ret: %d\n", cmd, ret);
 		goto error;
+	}
 
 	ret = ta_interface.trusted_app_hdcp2_update_app_data(ctx, app_data);
 
@@ -211,16 +213,18 @@ EXPORT_SYMBOL_GPL(hdcp2_init);
 void hdcp2_set_hdcp_key_verify_retries(void *ctx, u32 max_hdcp_key_verify_retries)
 {
 	struct hdcp2_qsee_handle *handle = ctx;
-
+	if (!handle)
+		return;
 	handle->max_hdcp_key_verify_retries = max_hdcp_key_verify_retries;
-
 	pr_debug("hdcp2 max_hdcp_key_verify_retries %d\n", handle->max_hdcp_key_verify_retries);
 }
 EXPORT_SYMBOL_GPL(hdcp2_set_hdcp_key_verify_retries);
 
 void hdcp2_deinit(void *ctx)
 {
+	mutex_lock(&hdcp2_mutex_g);
 	ta_interface.trusted_app_hdcp2_deinit(ctx);
+	mutex_unlock(&hdcp2_mutex_g);
 }
 EXPORT_SYMBOL_GPL(hdcp2_deinit);
 
@@ -239,16 +243,18 @@ EXPORT_SYMBOL_GPL(hdcp1_init);
 void hdcp1_set_hdcp_key_verify_retries(void *ctx, u32 max_hdcp_key_verify_retries)
 {
 	struct hdcp1_qsee_handle *handle = ctx;
-
+	if (!handle)
+		return;
 	handle->max_hdcp_key_verify_retries = max_hdcp_key_verify_retries;
-
 	pr_debug("hdcp1 max_hdcp_key_verify_retries %d\n", handle->max_hdcp_key_verify_retries);
 }
 EXPORT_SYMBOL_GPL(hdcp1_set_hdcp_key_verify_retries);
 
 void hdcp1_deinit(void *data)
 {
+	mutex_lock(&hdcp1_mutex_g);
 	kfree(data);
+	mutex_unlock(&hdcp1_mutex_g);
 }
 EXPORT_SYMBOL_GPL(hdcp1_deinit);
 
@@ -279,7 +285,9 @@ EXPORT_SYMBOL_GPL(hdcp1_set_enc);
 int hdcp1_ops_notify(void *data, void *topo, bool is_authenticated)
 {
 	int ret = 0;
-
+	/* notify takes a longer time to complete as it needs to invoke
+	 * listener in TZ
+	 */
 	ret = ta_interface.trusted_app_hdcp1_ops_notify(data, topo, is_authenticated);
 
 	return ret;
