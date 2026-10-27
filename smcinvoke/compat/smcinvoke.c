@@ -1480,7 +1480,9 @@ static int32_t smcinvoke_process_map_mem_region_req(void *buf, size_t buf_len)
 	struct smcinvoke_mem_obj *mem_obj = NULL;
 
 	if (msg->hdr.counts != OBJECT_COUNTS_PACK(0, 1, 1, 1) ||
-			(buf_len - msg->args[0].b.offset < msg->args[0].b.size)) {
+		msg->args[0].b.offset > buf_len ||
+		msg->args[0].b.size < sizeof(*ob) ||
+		msg->args[0].b.size > (buf_len - msg->args[0].b.offset)) {
 		pr_err("Invalid counts received for mapping mem obj\n");
 		return OBJECT_ERROR_INVALID;
 	}
@@ -1521,7 +1523,9 @@ static int32_t smcinvoke_sleep(void *buf, size_t buf_len)
     uint32_t sleepTimeMs_val = 0;
 
     if (msg->hdr.counts != OBJECT_COUNTS_PACK(1, 0, 0, 0) ||
-       (buf_len - msg->args[0].b.offset < msg->args[0].b.size)) {
+	msg->args[0].b.offset > buf_len ||
+	msg->args[0].b.size < sizeof(uint32_t) ||
+	msg->args[0].b.size > (buf_len - msg->args[0].b.offset)) {
          pr_err("Invalid counts received for sleeping in hlos\n");
          return OBJECT_ERROR_INVALID;
     }
