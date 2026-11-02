@@ -1796,12 +1796,30 @@ exit_unreg_chrdev_region:
 	return ret;
 }
 
+#if KERNEL_VERSION(6, 10, 0) > LINUX_VERSION_CODE
+static int smcinvoke_remove(struct platform_device *pdev)
+#else
+static void smcinvoke_remove(struct platform_device *pdev)
+#endif
+{
+	int count = 1;
+
+	device_destroy(driver_class, smcinvoke_device_no);
+	cdev_del(&smcinvoke_cdev);
+	class_destroy(driver_class);
+	unregister_chrdev_region(smcinvoke_device_no, count);
+#if KERNEL_VERSION(6, 10, 0) > LINUX_VERSION_CODE
+	return 0;
+#endif
+}
+
 static const struct of_device_id smcinvoke_match[] = {
 	{ .compatible = "qcom,smcinvoke", }, {},
 };
 
 static struct platform_driver smcinvoke_plat_driver = {
 	.probe = smcinvoke_probe,
+	.remove = smcinvoke_remove,
 	.driver = {
 		.name = "smcinvoke",
 		.of_match_table = smcinvoke_match,

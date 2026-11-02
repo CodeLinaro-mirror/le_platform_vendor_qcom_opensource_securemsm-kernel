@@ -72,11 +72,11 @@ int mem_obj_test_sg(struct si_object *mem_test_obj, struct si_object_invoke_ctx 
 int si_core_kernel_test_compat_retry_send_cmd(void);
 int si_core_kernel_test_compat_retry_shutdown(void);
 #else
-static int si_core_kernel_test_compat_retry_send_cmd(void)
+static inline int si_core_kernel_test_compat_retry_send_cmd(void)
 {
 	return 0;
 }
-static int si_core_kernel_test_compat_retry_shutdown(void)
+static inline int si_core_kernel_test_compat_retry_shutdown(void)
 {
 	return 0;
 }

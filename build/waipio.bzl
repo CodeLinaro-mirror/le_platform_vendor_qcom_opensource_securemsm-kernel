@@ -22,7 +22,7 @@ def define_waipio():
          extra_options = [
              "CONFIG_QCOM_SI_CORE_TEST",
              "CONFIG_QCOM_SMCINVOKE",
-             "CONFIG_QSEECOM_COMPAT",
+             "CONFIG_QSEECOM",
              "CONFIG_QCOM_SI_CORE",
          ],
      )
