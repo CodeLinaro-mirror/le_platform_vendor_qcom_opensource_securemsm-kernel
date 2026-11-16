@@ -2885,6 +2885,9 @@ static inline void qce_free_req_info(struct qce_device *pce_dev, int req_info,
 		bool is_complete)
 {
 	pce_dev->ce_request_info[req_info].xfer_type = QCE_XFER_TYPE_LAST;
+	pce_dev->ce_request_info[req_info].in_prog = false;
+	pce_dev->ce_request_info[req_info].areq = NULL;
+	pce_dev->ce_request_info[req_info].qce_err_cb = NULL;
 	if (atomic_xchg(&pce_dev->ce_request_info[req_info].in_use,
 						false)) {
 		if (req_info < MAX_QCE_BAM_REQ && is_complete)
@@ -4383,13 +4386,9 @@ static void qce_core_error_intr_irq(struct qce_device *pce_dev,
 				continue;
 			ce_req_info->in_prog = false;
 			pr_err("Shutting down request: %d\n", req_info);
-			if (ce_req_info->qce_err_cb) {
+			if (ce_req_info->qce_err_cb)
 				ce_req_info->qce_err_cb(ce_req_info->areq,
 							&qce_err);
-			} else {
-				panic("No error callback for req_info: %d.\n",
-				      req_info);
-			}
 		}
 	}
 }
